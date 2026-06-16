@@ -1,0 +1,1706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Segoe UI', Arial, sans-serif;
+  background: #060919;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 32px 16px 20px;
+}
+
+/* ── game container (canvas + all overlays stacked on top) ── */
+#game-container {
+  position: relative;
+  width: 100%;
+  max-width: 400px;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 2.5px solid #1a3a7a;
+  box-shadow: 0 8px 36px rgba(11,61,145,0.50);
+}
+#main-canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+/* ── overlays ── */
+.overlay {
+  display: none;
+  position: absolute;
+  inset: 0;
+  flex-direction: column;
+  align-items: center;
+}
+.overlay.active { display: flex; }
+
+/* ── start overlay: title top, launch button bottom ── */
+#start-overlay {
+  background: linear-gradient(180deg, rgba(6,9,25,0.20) 0%, rgba(6,9,25,0.55) 100%);
+  justify-content: space-between;
+  padding: 44px 24px 56px;
+}
+.game-title {
+  font-size: 1.9rem;
+  font-weight: 900;
+  letter-spacing: 3px;
+  color: #fff;
+  text-align: center;
+  line-height: 1.2;
+  text-shadow: 0 0 32px rgba(95,168,255,0.85), 0 2px 10px rgba(0,0,0,0.7);
+  pointer-events: none;
+}
+
+/* ── ready overlay: hint at the top ── */
+#ready-overlay {
+  background: linear-gradient(180deg, rgba(6,9,25,0.08) 0%, rgba(6,9,25,0.22) 100%);
+  justify-content: flex-start;
+  padding-top: 40px;
+  gap: 8px;
+}
+.ready-title {
+  font-size: 2rem;
+  font-weight: 900;
+  letter-spacing: 8px;
+  color: #fff;
+  text-shadow: 0 0 22px rgba(255,200,80,0.75), 0 2px 6px rgba(0,0,0,0.5);
+}
+.ready-hint {
+  font-size: 0.85rem;
+  color: rgba(210,225,255,0.92);
+  letter-spacing: 0.3px;
+  background: rgba(11,61,145,0.60);
+  padding: 6px 22px;
+  border-radius: 20px;
+  border: 1px solid rgba(120,155,230,0.45);
+}
+.ready-hint strong { color: #ff8c00; }
+
+/* ── end overlay: semi-transparent dark over frozen game ── */
+#end-overlay {
+  background: rgba(5,8,26,0.80);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+  justify-content: center;
+  gap: 12px;
+  padding: 24px 22px;
+}
+.game-over-text {
+  font-size: 2.4rem;
+  font-weight: 900;
+  letter-spacing: 6px;
+  color: #ff6b6b;
+  text-shadow: 0 0 20px rgba(255,100,100,0.65);
+}
+.score-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+.score-label-sm {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 2.5px;
+  color: rgba(170,190,230,0.80);
+}
+.score-big {
+  font-size: 5rem;
+  font-weight: 900;
+  color: #fff;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.best-line {
+  font-size: 0.82rem;
+  color: rgba(170,190,230,0.75);
+}
+.best-line span { color: #ff8c00; font-weight: 800; }
+.end-divider {
+  width: 55%;
+  height: 1px;
+  background: rgba(120,150,220,0.28);
+}
+
+/* ── nickname (end screen only) ── */
+.nickname-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: #8ab0e8;
+}
+#nickname-input {
+  width: 100%;
+  font-size: 1rem;
+  font-weight: 600;
+  padding: 10px 15px;
+  border: 2px solid rgba(120,150,220,0.50);
+  border-radius: 8px;
+  outline: none;
+  color: #fff;
+  background: rgba(10,16,50,0.82);
+  text-align: center;
+  letter-spacing: 1px;
+  transition: border-color 0.18s;
+}
+#nickname-input::placeholder { color: rgba(175,195,235,0.50); }
+#nickname-input:focus {
+  border-color: #5fa8ff;
+  box-shadow: 0 0 0 3px rgba(95,168,255,0.25);
+}
+#nickname-input.shake {
+  animation: shake 0.32s ease;
+  border-color: #e74c3c !important;
+}
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20%       { transform: translateX(-7px); }
+  50%       { transform: translateX(7px); }
+  80%       { transform: translateX(-4px); }
+}
+
+/* ── buttons ── */
+.btn-launch {
+  padding: 14px 56px;
+  font-size: 1.15rem;
+  font-weight: 900;
+  background: #0b3d91;
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  letter-spacing: 2px;
+  box-shadow: 0 0 28px rgba(95,168,255,0.55), 0 4px 14px rgba(0,0,0,0.35);
+  transition: background 0.18s, transform 0.1s, box-shadow 0.18s;
+}
+.btn-launch:hover  { background: #0d4db5; box-shadow: 0 0 36px rgba(95,168,255,0.75); }
+.btn-launch:active { transform: scale(0.96); }
+.btn-launch:disabled { background: #2d3a55; box-shadow: none; cursor: progress; }
+.btn-submit {
+  width: 100%;
+  padding: 12px 20px;
+  font-size: 0.95rem;
+  font-weight: 800;
+  background: #27ae60;
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  letter-spacing: 0.4px;
+  transition: background 0.18s, transform 0.1s;
+}
+.btn-submit:hover  { background: #229954; }
+.btn-submit:active { transform: scale(0.97); }
+.btn-submit:disabled { background: #3a5a44; cursor: default; }
+.btn-again {
+  background: none;
+  border: 1.5px solid rgba(120,150,220,0.55);
+  color: rgba(180,200,240,0.90);
+  padding: 9px 30px;
+  border-radius: 10px;
+  font-size: 0.88rem;
+  font-weight: 700;
+  cursor: pointer;
+  letter-spacing: 0.3px;
+  transition: border-color 0.18s, color 0.18s;
+}
+.btn-again:hover { border-color: #5fa8ff; color: #fff; }
+
+/* ── watermark (below container) ── */
+.watermark {
+  font-size: 0.62rem;
+  color: rgba(180,200,240,0.28);
+  letter-spacing: 0.5px;
+  margin-top: 10px;
+  user-select: none;
+}
+</style>
+</head>
+<body>
+
+<div id="game-container">
+  <canvas id="main-canvas" width="400" height="560"></canvas>
+
+  <!-- ATTRACT: game title + launch button -->
+  <div id="start-overlay" class="overlay active">
+    <div class="game-title">ROMAN TELESCOPE:<br>Journey to L2!</div>
+    <button class="btn-launch" id="launch-btn" onclick="goReady()" disabled>LAUNCH</button>
+  </div>
+
+  <!-- READY: get ready hint, telescope hovering at play position -->
+  <div id="ready-overlay" class="overlay">
+    <div class="ready-title">GET READY</div>
+    <div class="ready-hint">Tap to start <strong>flying</strong>!</div>
+  </div>
+
+  <!-- END: game over + score + nickname + actions -->
+  <div id="end-overlay" class="overlay">
+    <div class="game-over-text">GAME OVER</div>
+    <div class="score-panel">
+      <div class="score-label-sm">Score</div>
+      <div class="score-big" id="final-num">0</div>
+      <div class="best-line">Best: <span id="best-num">0</span></div>
+    </div>
+    <div class="end-divider"></div>
+    <div class="nickname-label">Your Nickname</div>
+    <input id="nickname-input" type="text" maxlength="20"
+           placeholder="Enter a nickname…"
+           autocomplete="off" spellcheck="false" />
+    <button class="btn-submit" id="submit-btn" onclick="submitScore()">Submit Score &amp; View Leaderboard</button>
+    <button class="btn-again" onclick="goReady()">Play Again</button>
+  </div>
+</div>
+
+<div class="watermark">Created by: S. K. Terry</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+//  Streamlit bridge
+// ═══════════════════════════════════════════════════════════════
+function _stPost(type, extra) {
+  window.parent.postMessage(
+    Object.assign({ isStreamlitMessage: true, type }, extra || {}), '*'
+  );
+}
+function _stSetValue(v) { _stPost('streamlit:setComponentValue', { value: v, dataType: 'json' }); }
+function _stSetHeight(h) { _stPost('streamlit:setFrameHeight', { height: h }); }
+function updateHeight() { _stSetHeight(document.documentElement.scrollHeight); }
+
+let _stReady = false;
+window.addEventListener('message', e => {
+  if (!e.data || e.data.type !== 'streamlit:render') return;
+  if (!_stReady) {
+    document.getElementById('launch-btn').disabled = false;
+    _stReady = true;
+    updateHeight();
+  }
+});
+_stPost('streamlit:componentReady', { apiVersion: 1 });
+if (window.ResizeObserver) new ResizeObserver(updateHeight).observe(document.body);
+window.addEventListener('load', updateHeight);
+
+// roundRect polyfill (needed before any draw calls)
+if (!CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
+    this.beginPath();
+    this.moveTo(x + r, y);
+    this.arcTo(x + w, y, x + w, y + h, r);
+    this.arcTo(x + w, y + h, x, y + h, r);
+    this.arcTo(x, y + h, x, y, r);
+    this.arcTo(x, y, x + w, y, r);
+    this.closePath();
+    return this;
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Config — tune feel here
+// ═══════════════════════════════════════════════════════════════
+const W        = 400, H = 560;
+const GROUND_H = 56;
+const GRAVITY  = 0.1;
+const FLAP     = -3.0;
+const MAX_FALL = 4;
+const SCROLL   = 1.2;
+const SPACING  = 185;   // x-distance between obstacle waves
+const COL_W    = 50;    // width of column-pair obstacles
+const GAP      = 118;   // vertical gap height in column pairs
+const CRAFT_X       = 96;
+const CRAFT_R       = 10;
+const TUNNEL_LENGTH = 3200;  // px — total structure length (exit corridor ~700px)
+const TUNNEL_GAP    = 110;   // vertical opening height
+
+// ═══════════════════════════════════════════════════════════════
+//  State machine
+// ═══════════════════════════════════════════════════════════════
+const STATE = { ATTRACT: 0, READY: 1, PLAYING: 2, DEAD: 3 };
+let state = STATE.ATTRACT;
+
+// ── canvas ──
+const canvas = document.getElementById('main-canvas');
+const ctx    = canvas.getContext('2d');
+
+// Shared scene state
+let stars = [];
+let bobT  = 0;
+
+// Game-specific state
+let craftY, craftV;
+let obstacles = [];
+let score, bestScore = 0;
+let GAME_ID = null, submitted = false;
+let PLAYER_NAME = '';
+let rafHandle   = null;
+
+// Wave scheduler — alternates between floating debris and column pairs
+const WAVE = { FLOAT: 'float', COLUMN: 'column' };
+let waveType  = WAVE.FLOAT;
+let waveCount = 4;
+
+// Tunnel scheduler
+let tunnelPending       = false;
+let tunnelSplit         = false; // true on every 2nd tunnel (80, 160, … pts)
+let lastTunnelThreshold = 0;
+
+function rand(a, b) { return a + Math.random() * (b - a); }
+
+// ═══════════════════════════════════════════════════════════════
+//  Seeded random — keeps asteroid shapes consistent frame-to-frame
+// ═══════════════════════════════════════════════════════════════
+function seededArr(seed, n) {
+  const out = [];
+  let s = Math.floor(seed * 99991) % 233280;
+  for (let i = 0; i < n; i++) { s = (s * 9301 + 49297) % 233280; out.push(s / 233280); }
+  return out;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Stars
+// ═══════════════════════════════════════════════════════════════
+function buildStars() {
+  const arr = [];
+  for (let i = 0; i < 70; i++) arr.push({
+    x: Math.random() * W,
+    y: Math.random() * (H - GROUND_H),
+    r: rand(0.4, 1.7),
+    layer: Math.random() < 0.4 ? 0.5 : 0.25,
+  });
+  return arr;
+}
+
+function initScene() { stars = buildStars(); }
+
+// ═══════════════════════════════════════════════════════════════
+//  Shooting star — rare diagonal streak across the sky
+// ═══════════════════════════════════════════════════════════════
+let shootingStar = null;   // active streak object, or null when none
+let nextShootAt  = 0;      // earliest timestamp (ms) the next one may appear
+
+// Pick a fresh random delay before the next streak is allowed (per game)
+function scheduleShootingStar() { nextShootAt = Date.now() + rand(15000, 45000); }
+
+function spawnShootingStar() {
+  const fromLeft = Math.random() < 0.5;
+  // Enter high in the sky, travel on a shallow downward diagonal
+  const ang   = fromLeft ? rand(0.32, 0.58) : Math.PI - rand(0.32, 0.58);
+  const speed = rand(7, 10);
+  shootingStar = {
+    x:    fromLeft ? rand(-10, W * 0.35) : rand(W * 0.65, W + 10),
+    y:    rand(8, (H - GROUND_H) * 0.4),
+    vx:   Math.cos(ang) * speed,
+    vy:   Math.sin(ang) * speed,
+    life: 0,
+    maxLife: rand(45, 72),   // frames
+    len:  rand(65, 115),     // tail length in px
+  };
+}
+
+function updateShootingStar() {
+  if (!shootingStar) {
+    // Only ever ignite during active play, after the random delay elapses
+    if (state === STATE.PLAYING && Date.now() >= nextShootAt) spawnShootingStar();
+    return;
+  }
+  const s = shootingStar;
+  s.x += s.vx; s.y += s.vy; s.life++;
+  if (s.life > s.maxLife || s.x < -130 || s.x > W + 130 || s.y > H - GROUND_H) {
+    shootingStar = null;
+    scheduleShootingStar();
+  }
+}
+
+function drawShootingStar() {
+  if (!shootingStar) return;
+  const s     = shootingStar;
+  const alpha = Math.sin(Math.PI * (s.life / s.maxLife)); // fade in then out (0→1→0)
+  const mag   = Math.hypot(s.vx, s.vy) || 1;
+  const tx    = s.x - (s.vx / mag) * s.len;
+  const ty    = s.y - (s.vy / mag) * s.len;
+
+  // Tail
+  const grad = ctx.createLinearGradient(s.x, s.y, tx, ty);
+  grad.addColorStop(0,   `rgba(255,255,255,${0.95 * alpha})`);
+  grad.addColorStop(0.4, `rgba(170,210,255,${0.45 * alpha})`);
+  grad.addColorStop(1,   'rgba(120,170,255,0)');
+  ctx.strokeStyle = grad; ctx.lineWidth = 2.2; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(s.x, s.y); ctx.stroke();
+
+  // Soft glow + bright head
+  const g = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, 9);
+  g.addColorStop(0, `rgba(200,225,255,${0.55 * alpha})`);
+  g.addColorStop(1, 'rgba(200,225,255,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(s.x, s.y, 9, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+  ctx.beginPath(); ctx.arc(s.x, s.y, 2.3, 0, Math.PI * 2); ctx.fill();
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Debris factory — five distinct types freely placed in the field
+// ═══════════════════════════════════════════════════════════════
+const DEBRIS_TYPES  = ['asteroid','asteroid','asteroid','ufo','tank','panel','astronaut','comet'];
+const AST_COLORS    = ['#5a5562','#6b5a50','#4a4850','#7a6870','#6a6460'];
+
+function makeDebris(x, y) {
+  const type = DEBRIS_TYPES[Math.floor(Math.random() * DEBRIS_TYPES.length)];
+  const seed = Math.random() * 9999;
+  let w, h, color;
+  switch (type) {
+    case 'asteroid':  w = rand(60,102); h = rand(53,91);  color = AST_COLORS[Math.floor(Math.random()*AST_COLORS.length)]; break;
+    case 'ufo':       w = rand(98,130); h = 53;  color = '#909aa8'; break;
+    case 'tank':      w = 46; h = rand(114,149); color = Math.random() < 0.5 ? '#e0e4ea' : '#e86020'; break;
+    case 'panel':     w = rand(112,147); h = 32;  color = '#1a2a8a'; break;
+    case 'astronaut': w = 44; h = rand(64, 76);  color = '#d8dce6'; break;
+    case 'comet':     w = rand(44, 56); h = w;   color = '#88aacc'; break;
+  }
+  return {
+    kind: 'debris',
+    x, y, type, w, h, color, scored: false,
+    angle: type === 'comet' ? Math.random() * Math.PI * 2 : rand(-0.38, 0.38),
+    shape: type === 'asteroid' ? seededArr(seed, 9) : [],
+  };
+}
+
+function spawnGroup(baseX) {
+  const margin = 54;
+  const usedY  = [];
+  for (let i = 0; i < 2; i++) {
+    let y, tries = 0;
+    do { y = rand(margin, H - GROUND_H - margin); tries++; }
+    while (tries < 30 && usedY.some(uy => Math.abs(uy - y) < 140));
+    usedY.push(y);
+    obstacles.push(makeDebris(baseX + (i === 0 ? 0 : rand(-30, 46)), y));
+  }
+}
+
+function spawnColumn(baseX) {
+  const minY = 60, maxY = H - GROUND_H - GAP - 60;
+  const gapY = rand(minY, maxY);
+  obstacles.push({ kind: 'column', x: baseX, w: COL_W, gapY, gap: GAP, scored: false });
+}
+
+function pickNextWave() {
+  const current = waveType;
+  waveCount--;
+  if (waveCount <= 0) {
+    waveType  = current === WAVE.FLOAT ? WAVE.COLUMN : WAVE.FLOAT;
+    waveCount = waveType === WAVE.FLOAT
+      ? Math.floor(rand(2, 5))   // 2–4 floating groups
+      : Math.floor(rand(3, 6));  // 3–5 column pairs
+  }
+  return current;
+}
+
+function spawnWave(baseX) {
+  if (pickNextWave() === WAVE.COLUMN) spawnColumn(baseX);
+  else spawnGroup(baseX);
+}
+
+function spawnTunnel(baseX, isSplit = false) {
+  const ROOM_H = 380;
+  const COR_H  = TUNNEL_GAP;
+  const midCY  = (H - GROUND_H) / 2;
+  const minCY  = 75 + COR_H / 2;
+  const maxCY  = H - GROUND_H - COR_H / 2 - 75;
+
+  const cy1 = Math.max(minCY, Math.min(maxCY, midCY + rand(-90, 90)));
+
+  // Same-x pairs create instant (sharp) vertical walls between zones.
+  // Zones: entry corridor (300px) → Room 1 (700px) → Corridor 1 (600px) → Room 2 (900px) → exit (1820px)
+  const keyframes = [
+    { x:    0, cy: midCY, gapH: COR_H  }, // entrance
+    { x:  300, cy: midCY, gapH: COR_H  }, // entry corridor end  ─┐ sharp wall
+    { x:  300, cy: midCY, gapH: ROOM_H }, // room 1 opens        ─┘
+    { x: 1000, cy: midCY, gapH: ROOM_H }, // room 1 end          ─┐ sharp wall
+    { x: 1000, cy: cy1,   gapH: COR_H  }, // corridor 1 (random) ─┘
+    { x: 1600, cy: cy1,   gapH: COR_H  }, // corridor 1 end      ─┐ sharp wall
+    { x: 1600, cy: midCY, gapH: ROOM_H }, // room 2 opens        ─┘
+    { x: 2500, cy: midCY, gapH: ROOM_H }, // room 2 end          ─┐ sharp wall
+    { x: 2500, cy: midCY, gapH: COR_H  }, // exit corridor       ─┘
+    { x: TUNNEL_LENGTH, cy: midCY, gapH: COR_H }, // exit
+  ];
+
+  // x-offsets where zone walls sit — used to render internal doorway faces
+  const wallXoffs = [300, 1000, 1600, 2500];
+
+  // Split path: every other tunnel gets two exit corridors — one open, one dead-end.
+  // Geometry: Room 2 spans xOff 1600–2500. The divider drops at xOff 2100,
+  // splitting into an upper channel (y 62–192) and lower channel (y 312–442).
+  // The sealed corridor ends at a wall face at xOff 2450; the open one passes through.
+  let split = null;
+  if (isSplit) {
+    split = {
+      xStart:    2100,  // where the dividing wall begins (inside Room 2)
+      divY_top:   192,  // top of dividing wall
+      divY_bot:   312,  // bottom of dividing wall
+      deadEndX:  2450,  // x-offset of sealed corridor wall face (and end of divider)
+      openUpper: Math.random() < 0.5,  // randomly assign which channel is safe
+    };
+    // Align the exit corridor with the open sub-channel so the player doesn't
+    // slam into a wall at xOff 2500 when the room narrows back to COR_H.
+    const exitCY = split.openUpper
+      ? (62 + split.divY_top) / 2   // upper channel centre ≈ 127
+      : (split.divY_bot + 442) / 2; // lower channel centre ≈ 377
+    keyframes[8] = { x: 2500,          cy: exitCY, gapH: COR_H };
+    keyframes[9] = { x: TUNNEL_LENGTH, cy: exitCY, gapH: COR_H };
+  }
+
+  // Floating obstacles inside Room 2 (xOff 1600–2500); all kept left of xOff 2050 to clear exit tunnels
+  const r2s = 1600;
+  // spin: slow clockwise angular velocity (rad/frame, positive = clockwise on a y-down canvas)
+  const internalObjects = [
+    { type: 'robot', xOff: rand(r2s + 40,  r2s + 160), y: midCY + rand(-100, 100), r: 30, angle: Math.random() * Math.PI * 2, spin: rand(0.006, 0.012) },
+    { type: 'tv',    xOff: rand(r2s + 180, r2s + 320), y: midCY + rand(-100, 100), r: 38, angle: Math.random() * Math.PI * 2, spin: rand(0.006, 0.012) },
+    { type: 'robot', xOff: rand(r2s + 340, r2s + 490), y: midCY + rand(-100, 100), r: 30, angle: Math.random() * Math.PI * 2, spin: rand(0.006, 0.012) },
+  ];
+
+  // Room 1 furniture placement (xOff 300–1000): desk group and Rocky on
+  // opposite sides, randomized per ship so they never overlap.
+  const deskLeft = Math.random() < 0.5;
+  const leftX  = rand(410, 590);
+  const rightX = rand(710, 930);
+  const room1 = {
+    deskXOff:  deskLeft ? leftX  : rightX,
+    rockyXOff: deskLeft ? rightX : leftX,
+  };
+
+  obstacles.push({
+    kind: 'tunnel',
+    x: baseX,
+    length: TUNNEL_LENGTH,
+    tunnelH: TUNNEL_GAP,
+    keyframes,
+    wallXoffs,
+    internalObjects,
+    room1,
+    split,
+    scored: true,
+  });
+}
+
+// Circle-vs-AABB for collision
+function circleRect(cx, cy, cr, rx, ry, rw, rh) {
+  const nx = Math.max(rx, Math.min(cx, rx + rw));
+  const ny = Math.max(ry, Math.min(cy, ry + rh));
+  const dx = cx - nx, dy = cy - ny;
+  return dx*dx + dy*dy < cr*cr;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Screen transitions
+// ═══════════════════════════════════════════════════════════════
+function showOverlay(id) {
+  document.querySelectorAll('.overlay').forEach(o => o.classList.remove('active'));
+  if (id) document.getElementById(id).classList.add('active');
+  updateHeight();
+}
+
+function goReady() {
+  craftY = H / 2; craftV = 0;
+  state  = STATE.READY;
+  showOverlay('ready-overlay');
+}
+
+function beginPlay() {
+  state = STATE.PLAYING; craftV = FLAP;
+  score = 0; submitted = false; obstacles = [];
+  waveType = WAVE.FLOAT; waveCount = 4; // first 4 waves guaranteed float
+  tunnelPending = false; tunnelSplit = false; lastTunnelThreshold = 0;
+  shootingStar = null; scheduleShootingStar();
+  let sx = W + 140;
+  for (let g = 0; g < 4; g++) { spawnWave(sx); sx += SPACING; }
+  showOverlay(null);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Main loop
+// ═══════════════════════════════════════════════════════════════
+function loop() {
+  rafHandle = requestAnimationFrame(loop);
+  for (const s of stars) {
+    s.x -= SCROLL * s.layer;
+    if (s.x < -2) { s.x = W + 2; s.y = Math.random() * (H - GROUND_H); }
+  }
+  updateShootingStar();
+  if (state === STATE.ATTRACT || state === STATE.READY) {
+    bobT += 0.045;
+    const bobX = state === STATE.ATTRACT ? W / 2 : CRAFT_X;
+    const bobY = H / 2 + Math.sin(bobT) * 14;
+    craftY = bobY;
+    renderAttract(bobX, bobY);
+  } else if (state === STATE.PLAYING) {
+    updateGame(); renderGame();
+  } else {
+    renderGame();  // frozen frame under end overlay
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Physics
+// ═══════════════════════════════════════════════════════════════
+function updateGame() {
+  craftV = Math.min(craftV + GRAVITY, MAX_FALL);
+  craftY += craftV;
+
+  // Queue a tunnel every 40 points; even-numbered triggers (80, 160 …) get split paths
+  const th = Math.floor(score / 25);
+  if (score > 0 && th > lastTunnelThreshold) {
+    tunnelPending = true;
+    tunnelSplit = (th % 2 === 0);
+    lastTunnelThreshold = th;
+  }
+
+  for (const d of obstacles) {
+    d.x -= SCROLL;
+    // Slowly rotate the robots/TV floating inside each tunnel (clockwise)
+    if (d.kind === 'tunnel') {
+      for (const obj of d.internalObjects) obj.angle += obj.spin;
+    }
+    // Tunnel earns no points (scored:true from birth); debris/columns score normally
+    if (!d.scored && d.x + d.w / 2 < CRAFT_X - CRAFT_R) { d.scored = true; score++; }
+  }
+
+  // Remove off-screen obstacles (tunnel uses left-edge x + length; others use center x + w/2)
+  obstacles = obstacles.filter(d =>
+    d.kind === 'tunnel' ? d.x + d.length > -12 : d.x + d.w / 2 > -12
+  );
+
+  // Rightmost point — tunnel's right edge keeps maxX high, suppressing new waves during traversal
+  const maxX = obstacles.length
+    ? Math.max(...obstacles.map(d => d.kind === 'tunnel' ? d.x + d.length : d.x))
+    : W;
+  if (maxX < W + SPACING) {
+    if (tunnelPending) {
+      spawnTunnel(maxX + SPACING, tunnelSplit);
+      tunnelPending = false; tunnelSplit = false;
+    } else {
+      spawnWave(maxX + rand(SPACING * 0.9, SPACING * 1.2));
+    }
+  }
+
+  const top = craftY - CRAFT_R, bot = craftY + CRAFT_R;
+  if (bot >= H - GROUND_H || top <= 0) { endGame(); return; }
+
+  for (const d of obstacles) {
+    if (d.kind === 'tunnel') {
+      if (CRAFT_X + CRAFT_R > d.x && CRAFT_X - CRAFT_R < d.x + d.length) {
+        const sh   = getTunnelShape(d, CRAFT_X - d.x);
+        const topY = sh.cy - sh.gapH / 2;
+        const botY = sh.cy + sh.gapH / 2;
+        if (craftY - CRAFT_R < topY || craftY + CRAFT_R > botY) { endGame(); return; }
+        for (const obj of d.internalObjects) {
+          if (Math.hypot(CRAFT_X - (d.x + obj.xOff), craftY - obj.y) < CRAFT_R + obj.r) {
+            endGame(); return;
+          }
+        }
+        if (d.split) {
+          const spl = d.split;
+          const xOff = CRAFT_X - d.x;
+          if (xOff >= spl.xStart) {
+            // Dividing wall between the two corridors
+            if (craftY + CRAFT_R > spl.divY_top && craftY - CRAFT_R < spl.divY_bot) {
+              endGame(); return;
+            }
+            // Dead-end wall in the sealed corridor
+            if (CRAFT_X + CRAFT_R >= d.x + spl.deadEndX) {
+              const inUpper = craftY < (spl.divY_top + spl.divY_bot) / 2;
+              if (spl.openUpper ? !inUpper : inUpper) { endGame(); return; }
+            }
+          }
+        }
+      }
+    } else if (d.kind === 'column') {
+      const hw = d.w / 2;
+      if (circleRect(CRAFT_X, craftY, CRAFT_R, d.x - hw, 0, d.w, d.gapY)) { endGame(); return; }
+      const botY = d.gapY + d.gap, botH = H - GROUND_H - botY;
+      if (botH > 0 && circleRect(CRAFT_X, craftY, CRAFT_R, d.x - hw, botY, d.w, botH)) { endGame(); return; }
+    } else {
+      if (circleRect(CRAFT_X, craftY, CRAFT_R, d.x - d.w/2, d.y - d.h/2, d.w, d.h)) { endGame(); return; }
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Background + ground
+// ═══════════════════════════════════════════════════════════════
+function drawBg() {
+  const sky = ctx.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, '#0a0e2a'); sky.addColorStop(0.6, '#13193f'); sky.addColorStop(1, '#1c1140');
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H);
+  for (const s of stars) {
+    ctx.globalAlpha = s.layer > 0.4 ? 0.9 : 0.5;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  drawShootingStar();
+}
+
+function drawGround() {
+  const g = ctx.createLinearGradient(0, H-GROUND_H, 0, H);
+  g.addColorStop(0, '#3a3550'); g.addColorStop(1, '#211d33');
+  ctx.fillStyle = g; ctx.fillRect(0, H-GROUND_H, W, GROUND_H);
+  ctx.fillStyle = 'rgba(255,255,255,0.06)';
+  for (let x = 0; x < W; x += 26) {
+    ctx.beginPath();
+    ctx.arc(x + ((Date.now()/80) % 26), H - GROUND_H + 16, 5, 0, Math.PI*2);
+    ctx.fill();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Debris renderers
+// ═══════════════════════════════════════════════════════════════
+function drawDebris(d) {
+  switch (d.type) {
+    case 'asteroid':  drawAsteroid(d);  break;
+    case 'ufo':       drawUFO(d);       break;
+    case 'tank':      drawTank(d);      break;
+    case 'panel':     drawPanel(d);     break;
+    case 'astronaut': drawAstronaut(d); break;
+    case 'comet':     drawComet(d);     break;
+  }
+}
+
+function hexLighten(hex, amt) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgb(${Math.min(255,(n>>16)+amt)},${Math.min(255,((n>>8)&0xff)+amt)},${Math.min(255,(n&0xff)+amt)})`;
+}
+
+function drawAsteroid(d) {
+  ctx.save(); ctx.translate(d.x, d.y); ctx.rotate(d.angle);
+  const rx = d.w/2, ry = d.h/2, sh = d.shape;
+  ctx.beginPath();
+  for (let i = 0; i < sh.length; i++) {
+    const a = (i / sh.length) * Math.PI * 2;
+    const r = 0.62 + sh[i] * 0.72;
+    i === 0 ? ctx.moveTo(Math.cos(a)*rx*r, Math.sin(a)*ry*r)
+            : ctx.lineTo(Math.cos(a)*rx*r, Math.sin(a)*ry*r);
+  }
+  ctx.closePath();
+  const ag = ctx.createRadialGradient(-rx*0.2,-ry*0.25,1,0,0,Math.max(rx,ry));
+  ag.addColorStop(0, hexLighten(d.color, 28)); ag.addColorStop(1, d.color);
+  ctx.fillStyle = ag; ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.fillStyle = 'rgba(0,0,0,0.22)';
+  ctx.beginPath(); ctx.arc(-rx*0.18,-ry*0.22,Math.min(rx,ry)*0.30,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc( rx*0.32, ry*0.18,Math.min(rx,ry)*0.17,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+
+function drawUFO(d) {
+  ctx.save(); ctx.translate(d.x, d.y);
+  const hw = d.w/2, hh = d.h/2;
+  // Disk
+  const dg = ctx.createLinearGradient(0,-hh,0,hh);
+  dg.addColorStop(0,'#b8c2d0'); dg.addColorStop(1,'#707880');
+  ctx.fillStyle = dg;
+  ctx.beginPath(); ctx.ellipse(0,hh*0.2,hw,hh*0.7,0,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle = '#5a6068'; ctx.lineWidth = 1; ctx.stroke();
+  // Green dome
+  ctx.fillStyle = '#44cc66';
+  ctx.beginPath(); ctx.ellipse(0,hh*0.05,hw*0.42,hh*0.82,0,Math.PI,0); ctx.fill();
+  ctx.strokeStyle = '#33aa55'; ctx.stroke();
+  // Dome sheen
+  ctx.fillStyle = 'rgba(180,255,200,0.20)';
+  ctx.beginPath(); ctx.ellipse(-hw*0.12,-hh*0.18,hw*0.15,hh*0.34,-0.4,0,Math.PI*2); ctx.fill();
+  // Running lights
+  ['#ff4444','#ffcc00','#00aaff'].forEach((c,i) => {
+    ctx.fillStyle = c;
+    ctx.beginPath(); ctx.arc((i-1)*hw*0.38,hh*0.12,2.8,0,Math.PI*2); ctx.fill();
+  });
+  ctx.restore();
+}
+
+function drawTank(d) {
+  ctx.save(); ctx.translate(d.x, d.y); ctx.rotate(d.angle);
+  const hw = d.w / 2, hh = d.h / 2;
+  const isOrange = d.color === '#e86020';
+
+  // Cylinder body — top 74% of height
+  const bodyBot = hh * 0.48;
+  ctx.fillStyle = d.color;
+  ctx.beginPath(); ctx.roundRect(-hw, -hh, d.w, hh + bodyBot, hw); ctx.fill();
+  ctx.strokeStyle = isOrange ? 'rgba(0,0,0,0.28)' : 'rgba(0,0,0,0.15)';
+  ctx.lineWidth = 1; ctx.stroke();
+
+  // Insulation bands / markings
+  if (isOrange) {
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    [-0.38, 0, 0.38].forEach(t =>
+      ctx.fillRect(-hw + 1.5, t * hh - 2.5, d.w - 3, 5)
+    );
+  } else {
+    ctx.fillStyle = '#0b3d91';
+    ctx.fillRect(-hw + 2, -hh * 0.52, d.w - 4, 5);
+    ctx.fillStyle = 'rgba(0,0,0,0.10)';
+    ctx.fillRect(-hw + 4, hh * 0.08, d.w - 8, hh * 0.26);
+  }
+
+  // Engine skirt — tapered collar below the tank body
+  const skirtBot = hh * 0.70;
+  ctx.fillStyle = isOrange ? '#7a2e0e' : '#585e66';
+  ctx.beginPath();
+  ctx.moveTo(-hw,        bodyBot);
+  ctx.lineTo( hw,        bodyBot);
+  ctx.lineTo( hw * 1.18, skirtBot);
+  ctx.lineTo(-hw * 1.18, skirtBot);
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.30)'; ctx.lineWidth = 0.8; ctx.stroke();
+
+  // Two engine nozzle bells
+  const bellTopHW = hw * 0.42;
+  const bellBotHW = hw * 0.58;
+  const bellH = hh - skirtBot;
+  ctx.fillStyle = '#484e56';
+  for (const cx of [-hw * 0.42, hw * 0.42]) {
+    ctx.beginPath();
+    ctx.moveTo(cx - bellTopHW, skirtBot);
+    ctx.lineTo(cx + bellTopHW, skirtBot);
+    ctx.lineTo(cx + bellBotHW, hh);
+    ctx.lineTo(cx - bellBotHW, hh);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = '#282e34'; ctx.lineWidth = 0.8; ctx.stroke();
+    // Throat opening
+    ctx.fillStyle = '#181c22';
+    ctx.beginPath();
+    ctx.arc(cx, skirtBot + bellH * 0.28, bellTopHW * 0.58, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+function drawPanel(d) {
+  ctx.save(); ctx.translate(d.x, d.y); ctx.rotate(d.angle);
+  const hw = d.w / 2, hh = d.h / 2;
+
+  // Layout: [left panel] — boom — [body] — boom — [right panel]
+  const bodyW = d.h * 1.1;   // roughly square body
+  const bodyH = d.h * 1.4;   // a bit taller than panel height
+  const gap   = 4;            // gap between panel edge and body
+  const panW  = hw - bodyW / 2 - gap;
+  const panH  = d.h * 0.82;
+
+  // Solar panels (draw first, body covers the overlap)
+  for (const sx of [-(bodyW / 2 + gap + panW / 2), (bodyW / 2 + gap + panW / 2)]) {
+    // Panel fill
+    ctx.fillStyle = '#1a2a8a';
+    ctx.fillRect(sx - panW / 2, -panH / 2, panW, panH);
+    // Grid lines (3 cols × 1 row divider)
+    ctx.strokeStyle = '#2a4ab8'; ctx.lineWidth = 0.7;
+    for (let i = 1; i < 3; i++) {
+      const lx = sx - panW / 2 + (panW / 3) * i;
+      ctx.beginPath(); ctx.moveTo(lx, -panH / 2); ctx.lineTo(lx, panH / 2); ctx.stroke();
+    }
+    ctx.beginPath(); ctx.moveTo(sx - panW / 2, 0); ctx.lineTo(sx + panW / 2, 0); ctx.stroke();
+    // Sheen
+    ctx.fillStyle = 'rgba(120,170,255,0.14)';
+    ctx.fillRect(sx - panW / 2, -panH / 2, panW * 0.38, panH);
+    // Border
+    ctx.strokeStyle = '#4a6aaa'; ctx.lineWidth = 1;
+    ctx.strokeRect(sx - panW / 2, -panH / 2, panW, panH);
+  }
+
+  // Booms connecting panels to body
+  ctx.strokeStyle = '#9098a0'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(-bodyW / 2, 0); ctx.lineTo(-(bodyW / 2 + gap), 0); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo( bodyW / 2, 0); ctx.lineTo(  bodyW / 2 + gap,  0); ctx.stroke();
+
+  // Main satellite body
+  ctx.fillStyle = '#8890a0';
+  ctx.fillRect(-bodyW / 2, -bodyH / 2, bodyW, bodyH);
+  // Instrument bay (dark top band)
+  ctx.fillStyle = '#383e4e';
+  ctx.fillRect(-bodyW / 2 + 2, -bodyH / 2 + 2, bodyW - 4, bodyH * 0.28);
+  // Aperture / sensor lens
+  ctx.fillStyle = 'rgba(60,130,235,0.72)';
+  ctx.beginPath(); ctx.arc(0, bodyH * 0.10, bodyW * 0.28, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#5068a8'; ctx.lineWidth = 0.8; ctx.stroke();
+  // Body border
+  ctx.strokeStyle = '#5c6472'; ctx.lineWidth = 1;
+  ctx.strokeRect(-bodyW / 2, -bodyH / 2, bodyW, bodyH);
+
+  // Antenna stub on top
+  ctx.strokeStyle = '#b0bac4'; ctx.lineWidth = 1.2;
+  ctx.beginPath(); ctx.moveTo(bodyW * 0.18, -bodyH / 2); ctx.lineTo(bodyW * 0.18, -bodyH / 2 - 9); ctx.stroke();
+  ctx.fillStyle = '#c8d0d8';
+  ctx.beginPath(); ctx.arc(bodyW * 0.18, -bodyH / 2 - 10.5, 2.2, 0, Math.PI * 2); ctx.fill();
+
+  ctx.restore();
+}
+
+function drawAstronaut(d) {
+  ctx.save(); ctx.translate(d.x, d.y); ctx.rotate(d.angle);
+  const sc = d.h / 72;
+
+  // Legs
+  ctx.fillStyle = '#d0d4de';
+  ctx.beginPath(); ctx.roundRect(-9*sc, 20*sc, 7*sc, 14*sc, 2*sc); ctx.fill();
+  ctx.beginPath(); ctx.roundRect( 2*sc, 20*sc, 7*sc, 14*sc, 2*sc); ctx.fill();
+  // Boots
+  ctx.fillStyle = '#a8b0be';
+  ctx.beginPath(); ctx.roundRect(-10*sc, 30*sc, 9*sc,  5*sc, 1.5*sc); ctx.fill();
+  ctx.beginPath(); ctx.roundRect(  1*sc, 30*sc, 9*sc,  5*sc, 1.5*sc); ctx.fill();
+
+  // Left arm
+  ctx.fillStyle = '#d0d4de';
+  ctx.beginPath(); ctx.roundRect(-22*sc, 2*sc, 11*sc, 7*sc, 3*sc); ctx.fill();
+  // Right arm
+  ctx.beginPath(); ctx.roundRect( 11*sc, 2*sc, 11*sc, 7*sc, 3*sc); ctx.fill();
+  // Gloves
+  ctx.fillStyle = '#b0b8c8';
+  ctx.beginPath(); ctx.arc(-17*sc, 8*sc, 4*sc, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc( 17*sc, 8*sc, 4*sc, 0, Math.PI*2); ctx.fill();
+
+  // Torso (with PLSS life-support box suggestion)
+  ctx.fillStyle = '#dce0ea';
+  ctx.beginPath(); ctx.roundRect(-12*sc, -2*sc, 24*sc, 24*sc, 3*sc); ctx.fill();
+  ctx.strokeStyle = '#9098a8'; ctx.lineWidth = 0.8*sc; ctx.stroke();
+  // Chest panel detail
+  ctx.fillStyle = '#6878a0';
+  ctx.fillRect(-5*sc, 3*sc, 10*sc, 6*sc);
+  ctx.fillStyle = '#f04040';
+  ctx.beginPath(); ctx.arc(-2*sc, 6*sc, 1.5*sc, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#40c040';
+  ctx.beginPath(); ctx.arc( 2*sc, 6*sc, 1.5*sc, 0, Math.PI*2); ctx.fill();
+
+  // Neck ring
+  ctx.fillStyle = '#b8c0d0';
+  ctx.beginPath(); ctx.ellipse(0, -3*sc, 7*sc, 3.5*sc, 0, 0, Math.PI*2); ctx.fill();
+
+  // Helmet
+  ctx.fillStyle = '#e8ecf4';
+  ctx.beginPath(); ctx.arc(0, -15*sc, 13*sc, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = '#a0a8b8'; ctx.lineWidth = sc; ctx.stroke();
+  // Gold visor
+  ctx.fillStyle = '#c08818';
+  ctx.beginPath(); ctx.ellipse(0, -14*sc, 9*sc, 6.5*sc, 0, 0, Math.PI*2); ctx.fill();
+  // Visor sheen
+  ctx.fillStyle = 'rgba(255,215,100,0.35)';
+  ctx.beginPath(); ctx.ellipse(-3*sc, -17*sc, 4*sc, 2.5*sc, -0.3, 0, Math.PI*2); ctx.fill();
+
+  ctx.restore();
+}
+
+function drawComet(d) {
+  ctx.save(); ctx.translate(d.x, d.y); ctx.rotate(d.angle);
+  const r = d.w / 2;
+  const tailLen = r * 7;
+
+  // Outer diffuse tail
+  const tg1 = ctx.createLinearGradient(r * 0.5, 0, r + tailLen, 0);
+  tg1.addColorStop(0,   'rgba(70,140,255,0.55)');
+  tg1.addColorStop(0.45,'rgba(50,110,255,0.22)');
+  tg1.addColorStop(1,   'rgba(20, 70,220,0)');
+  ctx.strokeStyle = tg1;
+  ctx.lineWidth = r * 2.2;
+  ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(r * 0.6, 0); ctx.lineTo(r + tailLen, 0); ctx.stroke();
+
+  // Bright inner streak
+  const tg2 = ctx.createLinearGradient(r * 0.5, 0, r + tailLen * 0.65, 0);
+  tg2.addColorStop(0,   'rgba(210,235,255,0.92)');
+  tg2.addColorStop(0.5, 'rgba(130,190,255,0.50)');
+  tg2.addColorStop(1,   'rgba(80,150,255,0)');
+  ctx.strokeStyle = tg2;
+  ctx.lineWidth = r * 0.55;
+  ctx.beginPath(); ctx.moveTo(r * 0.6, 0); ctx.lineTo(r + tailLen * 0.65, 0); ctx.stroke();
+
+  // Outer coma — large diffuse dust/gas cloud
+  const coma1 = ctx.createRadialGradient(0, 0, r * 0.3, 0, 0, r * 3.0);
+  coma1.addColorStop(0,   'rgba(130,190,255,0.42)');
+  coma1.addColorStop(0.5, 'rgba(80,140,255,0.15)');
+  coma1.addColorStop(1,   'rgba(40,100,220,0)');
+  ctx.fillStyle = coma1;
+  ctx.beginPath(); ctx.arc(0, 0, r * 3.0, 0, Math.PI * 2); ctx.fill();
+
+  // Inner coma — denser dust envelope close to nucleus
+  const coma2 = ctx.createRadialGradient(0, 0, r * 0.1, 0, 0, r * 1.9);
+  coma2.addColorStop(0,   'rgba(210,235,255,0.60)');
+  coma2.addColorStop(0.55,'rgba(155,205,255,0.32)');
+  coma2.addColorStop(1,   'rgba(80,150,255,0)');
+  ctx.fillStyle = coma2;
+  ctx.beginPath(); ctx.arc(0, 0, r * 1.9, 0, Math.PI * 2); ctx.fill();
+
+  // Nucleus body (buried under coma)
+  const ng = ctx.createRadialGradient(-r * 0.22, -r * 0.22, r * 0.06, 0, 0, r);
+  ng.addColorStop(0,   '#cce8ff');
+  ng.addColorStop(0.4, '#6a8aaa');
+  ng.addColorStop(1,   '#2e3e50');
+  ctx.fillStyle = ng;
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
+
+  // Ice patch on nucleus
+  ctx.fillStyle = 'rgba(255,255,255,0.22)';
+  ctx.beginPath(); ctx.arc(-r * 0.30, -r * 0.28, r * 0.28, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = 'rgba(0,0,0,0.18)';
+  ctx.beginPath(); ctx.arc(r * 0.20, r * 0.16, r * 0.20, 0, Math.PI * 2); ctx.fill();
+
+  // Dust veil overlay — drawn ON TOP of nucleus to blur/shroud its edge
+  const veil = ctx.createRadialGradient(0, 0, r * 0.55, 0, 0, r * 1.6);
+  veil.addColorStop(0,   'rgba(170,215,255,0)');
+  veil.addColorStop(0.65,'rgba(145,195,255,0.30)');
+  veil.addColorStop(1,   'rgba(80,140,255,0)');
+  ctx.fillStyle = veil;
+  ctx.beginPath(); ctx.arc(0, 0, r * 1.6, 0, Math.PI * 2); ctx.fill();
+
+  ctx.restore();
+}
+
+function drawColumn(d) {
+  const hw = d.w / 2;
+  ctx.save();
+
+  function drawSeg(y, h, capSide) {
+    if (h <= 0) return;
+    // Body — dark space-rock gradient
+    const g = ctx.createLinearGradient(d.x - hw, 0, d.x + hw, 0);
+    g.addColorStop(0,   '#18182a');
+    g.addColorStop(0.3, '#383558');
+    g.addColorStop(0.7, '#302e50');
+    g.addColorStop(1,   '#14131f');
+    ctx.fillStyle = g;
+    ctx.fillRect(d.x - hw, y, d.w, h);
+
+    // Left highlight / right shadow
+    ctx.fillStyle = 'rgba(120,110,180,0.22)';
+    ctx.fillRect(d.x - hw, y, 5, h);
+    ctx.fillStyle = 'rgba(0,0,0,0.38)';
+    ctx.fillRect(d.x + hw - 5, y, 5, h);
+
+    // Horizontal strata lines
+    ctx.strokeStyle = 'rgba(90,82,130,0.38)';
+    ctx.lineWidth = 1;
+    for (let by = y + 22; by < y + h; by += 26) {
+      ctx.beginPath(); ctx.moveTo(d.x - hw, by); ctx.lineTo(d.x + hw, by); ctx.stroke();
+    }
+
+    // Cap edge (the face pointing into the gap)
+    const capY = capSide === 'bottom' ? y + h - 9 : y;
+    ctx.fillStyle = '#5e5c88';
+    ctx.fillRect(d.x - hw, capY, d.w, 9);
+    ctx.fillStyle = 'rgba(190,182,255,0.42)';
+    ctx.fillRect(d.x - hw, capSide === 'bottom' ? capY : capY + 7, d.w, 2);
+  }
+
+  drawSeg(0, d.gapY, 'bottom');
+  const botY = d.gapY + d.gap;
+  drawSeg(botY, H - GROUND_H - botY, 'top');
+  ctx.restore();
+}
+
+function drawTV(x, y, angle) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(angle);
+
+  // Static drop shadow (offset lower-right, softened) for depth
+  ctx.save();
+  ctx.filter = 'blur(4px)';
+  ctx.fillStyle = 'rgba(0,0,0,0.22)';
+  ctx.fillRect(-46 + 6, -32 + 6, 91, 63);
+  ctx.restore();
+
+  // Outer bezel (91 × 63)
+  ctx.fillStyle = '#111120';
+  ctx.fillRect(-46, -32, 91, 63);
+  ctx.strokeStyle = '#383850'; ctx.lineWidth = 3.5;
+  ctx.strokeRect(-46, -32, 91, 63);
+
+  // Screen background
+  ctx.fillStyle = '#040810';
+  ctx.fillRect(-39, -25, 77, 46);
+
+  // Colour bars (broadcast test-card style)
+  const bars = ['#c8b818', '#18c0a0', '#1868e0', '#9018b8', '#d04020', '#28a840', '#c8b818'];
+  const bw = 77 / bars.length;
+  bars.forEach((c, i) => {
+    ctx.fillStyle = c; ctx.fillRect(-39 + i * bw, -25, bw, 30);
+  });
+
+  // Dark lower panel
+  ctx.fillStyle = '#03060e';
+  ctx.fillRect(-39, 5, 77, 16);
+
+  // Scanlines
+  ctx.fillStyle = 'rgba(0,0,0,0.22)';
+  for (let ly = -25; ly < 21; ly += 5) ctx.fillRect(-39, ly, 77, 1.5);
+
+  // Screen glow border
+  ctx.strokeStyle = 'rgba(70,140,255,0.65)'; ctx.lineWidth = 2;
+  ctx.strokeRect(-39, -25, 77, 46);
+
+  // Power LED bottom-right of bezel
+  ctx.fillStyle = '#00ff80';
+  ctx.beginPath(); ctx.arc(36, 24, 3.5, 0, Math.PI * 2); ctx.fill();
+
+  ctx.restore();
+}
+
+function drawRobot(x, y, angle) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(angle);
+
+  // Static drop shadow (offset lower-right, softened) — silhouette of the main mass for depth
+  const shX = 6, shY = 6;
+  ctx.save();
+  ctx.filter = 'blur(4px)';
+  ctx.fillStyle = 'rgba(0,0,0,0.22)';
+  ctx.fillRect(-18 + shX, -46 + shY, 35, 37);  // head
+  ctx.fillRect(-21 + shX,  -9 + shY, 42, 39);  // body
+  ctx.fillRect(-33 + shX,  -5 + shY, 12, 25);  // left arm
+  ctx.fillRect( 21 + shX,  -5 + shY, 12, 25);  // right arm
+  ctx.fillRect(-18 + shX,  30 + shY, 14, 25);  // left leg + foot
+  ctx.fillRect(  4 + shX,  30 + shY, 14, 25);  // right leg + foot
+  ctx.restore();
+
+  // All dimensions are original × 1.75
+  // Body
+  ctx.fillStyle = '#5a7888';
+  ctx.fillRect(-21, -9, 42, 39);
+  ctx.strokeStyle = '#304858'; ctx.lineWidth = 2.5; ctx.strokeRect(-21, -9, 42, 39);
+
+  // Chest panel
+  ctx.fillStyle = '#304858'; ctx.fillRect(-14, 0, 28, 21);
+
+  // Chest LEDs
+  ctx.fillStyle = '#20e070'; ctx.beginPath(); ctx.arc(-5,  7, 4, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#e83030'; ctx.beginPath(); ctx.arc( 5,  7, 4, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#2060ff'; ctx.beginPath(); ctx.arc( 0, 18, 4, 0, Math.PI*2); ctx.fill();
+
+  // Head
+  ctx.fillStyle = '#5a7888';
+  ctx.fillRect(-18, -46, 35, 37);
+  ctx.strokeStyle = '#304858'; ctx.lineWidth = 2.5; ctx.strokeRect(-18, -46, 35, 37);
+
+  // Eyes
+  ctx.fillStyle = '#28c8f0';
+  ctx.beginPath(); ctx.arc(-7, -30, 8, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc( 7, -30, 8, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#002838';
+  ctx.beginPath(); ctx.arc(-7, -30, 3.5, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc( 7, -30, 3.5, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.beginPath(); ctx.arc(-5, -32, 2, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc( 9, -32, 2, 0, Math.PI*2); ctx.fill();
+
+  // Antenna
+  ctx.strokeStyle = '#7898a8'; ctx.lineWidth = 3.5;
+  ctx.beginPath(); ctx.moveTo(0, -46); ctx.lineTo(0, -60); ctx.stroke();
+  ctx.fillStyle = '#ff5808';
+  ctx.beginPath(); ctx.arc(0, -63, 6, 0, Math.PI*2); ctx.fill();
+
+  // Arms
+  ctx.fillStyle = '#486878';
+  ctx.fillRect(-33, -5, 12, 25); ctx.fillRect(21, -5, 12, 25);
+  ctx.fillStyle = '#304858';
+  ctx.beginPath(); ctx.arc(-26, 23, 7, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc( 26, 23, 7, 0, Math.PI*2); ctx.fill();
+
+  // Legs + feet
+  ctx.fillStyle = '#486878';
+  ctx.fillRect(-18, 30, 14, 19); ctx.fillRect(4, 30, 14, 19);
+  ctx.fillStyle = '#304858';
+  ctx.fillRect(-21, 46, 18, 9); ctx.fillRect(4, 46, 18, 9);
+
+  ctx.restore();
+}
+
+// Returns {cy, gapH} of the tunnel opening at a given x-offset along the structure.
+function getTunnelShape(d, xOff) {
+  const kf = d.keyframes;
+  const xc = Math.max(0, Math.min(xOff, kf[kf.length - 1].x));
+  let i = 0;
+  while (i < kf.length - 2 && kf[i + 1].x <= xc) i++;
+  const a = kf[i], b = kf[i + 1];
+  const t = (xc - a.x) / Math.max(1, b.x - a.x);
+  const s = t * t * (3 - 2 * t);
+  return {
+    cy:   a.cy   + (b.cy   - a.cy)   * s,
+    gapH: a.gapH + (b.gapH - a.gapH) * s,
+  };
+}
+
+function drawTunnel(d) {
+  const x0   = Math.max(0, d.x);
+  const x1   = Math.min(W, d.x + d.length);
+  if (x1 <= x0) return;
+
+  // Build vertex arrays every 4 px for smooth curved walls
+  const step = 4;
+  const xs = [], topYs = [], botYs = [];
+  for (let x = x0; x <= x1 + step; x += step) {
+    const xc = Math.min(x, x1);
+    const sh = getTunnelShape(d, xc - d.x);
+    xs.push(xc);
+    topYs.push(sh.cy - sh.gapH / 2);
+    botYs.push(sh.cy + sh.gapH / 2);
+  }
+  const n = xs.length;
+
+  // ── Wall fill ──
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#13132a'); bg.addColorStop(1, '#1e1e38');
+  ctx.fillStyle = bg;
+
+  ctx.beginPath(); // top wall polygon
+  ctx.moveTo(xs[0], 0);
+  for (let i = 0; i < n; i++) ctx.lineTo(xs[i], topYs[i]);
+  ctx.lineTo(xs[n-1], 0);
+  ctx.closePath(); ctx.fill();
+
+  ctx.beginPath(); // bottom wall polygon
+  ctx.moveTo(xs[0], H - GROUND_H);
+  for (let i = 0; i < n; i++) ctx.lineTo(xs[i], botYs[i]);
+  ctx.lineTo(xs[n-1], H - GROUND_H);
+  ctx.closePath(); ctx.fill();
+
+  // ── Interior corridor fill + scroll indicators ──
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(xs[0], topYs[0]);
+  for (let i = 1; i < n; i++) ctx.lineTo(xs[i], topYs[i]);
+  for (let i = n - 1; i >= 0; i--) ctx.lineTo(xs[i], botYs[i]);
+  ctx.closePath();
+  ctx.clip();
+
+  const intFill = ctx.createLinearGradient(0, 0, 0, H);
+  intFill.addColorStop(0,   '#70798c');
+  intFill.addColorStop(0.5, '#a0a8b5');
+  intFill.addColorStop(1,   '#70798c');
+  ctx.fillStyle = intFill;
+  ctx.fillRect(x0, 0, x1 - x0, H);
+
+  // Horizontal hull-plate seams (fixed Y — give the corridor texture and depth)
+  const hRibSpacing = 32;
+  ctx.strokeStyle = 'rgba(60,70,90,0.22)';
+  ctx.lineWidth = 1;
+  for (let ry = 0; ry < H; ry += hRibSpacing) {
+    ctx.beginPath(); ctx.moveTo(x0, ry); ctx.lineTo(x1, ry); ctx.stroke();
+  }
+
+  // Vertical rivet ticks aligned to world-X — these scroll left, making motion obvious
+  const tickSpacingInt = 64;
+  const tick0Int = x0 - ((x0 - d.x) % tickSpacingInt);
+  ctx.strokeStyle = 'rgba(60,70,90,0.45)';
+  ctx.lineWidth = 1.5;
+  for (let tx = tick0Int; tx <= x1; tx += tickSpacingInt) {
+    for (let ry = 0; ry < H; ry += hRibSpacing) {
+      ctx.beginPath(); ctx.moveTo(tx, ry - 5); ctx.lineTo(tx, ry + 5); ctx.stroke();
+    }
+  }
+
+  ctx.restore();
+
+  // ── Vertical panel seams ──
+  ctx.strokeStyle = 'rgba(70,80,140,0.35)'; ctx.lineWidth = 1;
+  const panW  = 64;
+  const seam0 = x0 - ((x0 - d.x) % panW);
+  for (let px = seam0; px <= x1; px += panW) {
+    const idx = Math.max(0, Math.min(Math.round((px - x0) / step), n - 1));
+    ctx.beginPath(); ctx.moveTo(px, 0);          ctx.lineTo(px, topYs[idx]); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(px, botYs[idx]); ctx.lineTo(px, H - GROUND_H); ctx.stroke();
+  }
+
+  // ── Inner structural cap (dark band) then blue guide-light strip ──
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 9; ctx.strokeStyle = '#2a2a50';
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) i === 0 ? ctx.moveTo(xs[i], topYs[i]) : ctx.lineTo(xs[i], topYs[i]);
+  ctx.stroke();
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) i === 0 ? ctx.moveTo(xs[i], botYs[i]) : ctx.lineTo(xs[i], botYs[i]);
+  ctx.stroke();
+
+  ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(80,180,255,0.90)';
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) i === 0 ? ctx.moveTo(xs[i], topYs[i]) : ctx.lineTo(xs[i], topYs[i]);
+  ctx.stroke();
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) i === 0 ? ctx.moveTo(xs[i], botYs[i]) : ctx.lineTo(xs[i], botYs[i]);
+  ctx.stroke();
+
+  // ── Rectangular windows on the interior grey wall (one per room) ──
+  // Room 1 centre: xOff 650  |  Room 2 centre: xOff 2050
+  const windowXOffs = [650, 2050];
+  const WW = 120, WH = 80; // landscape rectangle
+  for (let wi = 0; wi < windowXOffs.length; wi++) {
+    const wxOff = windowXOffs[wi];
+    const wx = d.x + wxOff;
+    if (wx + WW / 2 < x0 || wx - WW / 2 > x1) continue;
+    const wsh = getTunnelShape(d, wxOff);
+    if (wsh.gapH < 200) continue; // rooms only — skip narrow corridors
+    const inTop = (wi % 2 === 0);
+    // Place flush against the interior edge of the grey wall
+    const wy = inTop
+      ? wsh.cy - wsh.gapH / 2 + WH / 2 + 10
+      : wsh.cy + wsh.gapH / 2 - WH / 2 - 10;
+    const wx0 = wx - WW / 2, wy0 = wy - WH / 2;
+
+    // Star field view through window
+    ctx.save();
+    ctx.beginPath(); ctx.rect(wx0, wy0, WW, WH); ctx.clip();
+    ctx.fillStyle = '#060919'; ctx.fillRect(wx0, wy0, WW, WH);
+    for (const s of stars) {
+      ctx.globalAlpha = s.layer > 0.4 ? 0.9 : 0.5;
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+
+    // Window frame + inner bevel
+    ctx.strokeStyle = '#50586a'; ctx.lineWidth = 4;
+    ctx.strokeRect(wx0, wy0, WW, WH);
+    ctx.strokeStyle = 'rgba(190,200,215,0.55)'; ctx.lineWidth = 1.5;
+    ctx.strokeRect(wx0 + 3.5, wy0 + 3.5, WW - 7, WH - 7);
+  }
+
+  // ── Desk, chair & Nancy figurine (Room 1, randomized position) ──
+  const deskXOff = d.room1.deskXOff;
+  const deskAbsX = d.x + deskXOff;
+  if (deskAbsX + 90 >= x0 && deskAbsX - 90 <= x1) {
+    const dsh    = getTunnelShape(d, deskXOff);
+    const floorY = dsh.cy + dsh.gapH / 2;
+
+    // Only draw inside Room 1 (large gap)
+    if (dsh.gapH > 200) {
+      const deskW = 72, deskLegH = 24, deskTopH = 6;
+      const deskTopY = floorY - deskLegH - deskTopH;
+
+      // Chair — simple side profile, facing the desk (backrest on the left)
+      const seatW = 26, seatH = 5, chairLegH = 17;
+      const seatY = floorY - chairLegH - seatH;
+      const backX = deskAbsX - 56;          // back/left edge of the seat
+
+      // Static drop shadow (offset lower-right, softened) behind the furniture masses for depth
+      const fsx = 4, fsy = 5;
+      ctx.save();
+      ctx.filter = 'blur(4px)';
+      ctx.fillStyle = 'rgba(0,0,0,0.18)';
+      ctx.fillRect(backX + fsx, seatY - 22 + fsy, seatW, chairLegH + seatH + 22);            // chair mass
+      ctx.fillRect(deskAbsX - deskW / 2 + fsx, deskTopY + fsy, deskW, deskLegH + deskTopH);  // desk mass
+      ctx.restore();
+
+      // Backrest: single vertical post
+      ctx.fillStyle = '#7a4a28';
+      ctx.fillRect(backX, seatY - 22, 4, 27);   // back post
+      // Seat plank
+      ctx.fillStyle = '#8b5e3c';
+      ctx.fillRect(backX, seatY, seatW, seatH);
+      ctx.strokeStyle = '#4a2a10'; ctx.lineWidth = 0.8;
+      ctx.strokeRect(backX, seatY, seatW, seatH);
+      // Two legs (back and front)
+      ctx.fillStyle = '#5c3318';
+      ctx.fillRect(backX, seatY + seatH, 4, chairLegH);
+      ctx.fillRect(backX + seatW - 4, seatY + seatH, 4, chairLegH);
+
+      // Desk legs
+      ctx.fillStyle = '#5c3318';
+      ctx.fillRect(deskAbsX - 33, deskTopY + deskTopH, 5, deskLegH);
+      ctx.fillRect(deskAbsX + 28, deskTopY + deskTopH, 5, deskLegH);
+      // Desk surface
+      ctx.fillStyle = '#a0714a';
+      ctx.fillRect(deskAbsX - deskW / 2, deskTopY, deskW, deskTopH);
+      ctx.strokeStyle = '#4a2a10'; ctx.lineWidth = 1;
+      ctx.strokeRect(deskAbsX - deskW / 2, deskTopY, deskW, deskTopH);
+      // Desk edge highlight
+      ctx.fillStyle = 'rgba(255,220,170,0.18)';
+      ctx.fillRect(deskAbsX - deskW / 2 + 1, deskTopY + 1, deskW - 2, 2);
+
+      // Nancy figurine sitting on desk (source 221×360, aspect ≈ 0.61)
+      const figH = 40, figW = figH * 0.61;
+      const figX = deskAbsX - figW / 2 + 6;
+      const figY = deskTopY - figH;
+      if (nancyImg.complete && nancyImg.naturalWidth > 0) {
+        ctx.save();
+        ctx.shadowColor = 'rgba(0,0,0,0.25)';
+        ctx.shadowBlur = 9;
+        ctx.shadowOffsetX = 4;
+        ctx.shadowOffsetY = 4;
+        ctx.drawImage(nancyImg, figX, figY, figW, figH);
+        ctx.restore();
+      }
+    }
+  }
+
+  // ── Rocky figure standing on the floor (Room 1, randomized position) ──
+  const rockyXOff = d.room1.rockyXOff;
+  const rockyAbsX = d.x + rockyXOff;
+  if (rockyAbsX + 40 >= x0 && rockyAbsX - 40 <= x1) {
+    const rsh = getTunnelShape(d, rockyXOff);
+    if (rsh.gapH > 200) {
+      const rockyFloorY = rsh.cy + rsh.gapH / 2;
+      const rockySize = 46;                       // source is 640×640 (square)
+      const rockyX = rockyAbsX - rockySize / 2;
+      const rockyY = rockyFloorY - rockySize + 2; // feet planted on the floor
+      if (rockyImg.complete && rockyImg.naturalWidth > 0) {
+        ctx.save();
+        ctx.shadowColor = 'rgba(0,0,0,0.28)';
+        ctx.shadowBlur = 10;
+        ctx.shadowOffsetX = 5;
+        ctx.shadowOffsetY = 5;
+        ctx.drawImage(rockyImg, rockyX, rockyY, rockySize, rockySize);
+        ctx.restore();
+      }
+    }
+  }
+
+  // ── Hazard chevrons on entrance and exit faces ──
+  const fw = 13;
+  function drawFace(fx, xOff) {
+    if (fx < x0 - fw || fx > x1 + fw) return;
+    const sh  = getTunnelShape(d, xOff);
+    const top = sh.cy - sh.gapH / 2;
+    const bot = sh.cy + sh.gapH / 2;
+    const rx  = fx - fw;
+    for (let y = 0; y < top; y += 22) {
+      ctx.fillStyle = (Math.floor(y / 11) % 2 === 0) ? '#f5c518' : '#14142a';
+      ctx.fillRect(rx, y, fw, Math.min(11, top - y));
+    }
+    for (let y = bot; y < H - GROUND_H; y += 22) {
+      ctx.fillStyle = (Math.floor((y - bot) / 11) % 2 === 0) ? '#f5c518' : '#14142a';
+      ctx.fillRect(rx, y, fw, Math.min(11, H - GROUND_H - y));
+    }
+    ctx.fillStyle = 'rgba(80,180,255,0.35)';
+    ctx.fillRect(rx, top, fw, sh.gapH);
+  }
+
+  // ── Split-path section (even-numbered tunnels only) ──
+  if (d.split) {
+    const spl  = d.split;
+    const sx0  = Math.max(x0, d.x + spl.xStart);
+    const sx1  = Math.min(x1, d.x + spl.deadEndX);
+
+    if (sx1 > sx0) {
+      // Dividing wall fill
+      ctx.fillStyle = bg;
+      ctx.fillRect(sx0, spl.divY_top, sx1 - sx0, spl.divY_bot - spl.divY_top);
+
+      // Panel seams on divider
+      ctx.strokeStyle = 'rgba(70,80,140,0.35)'; ctx.lineWidth = 1;
+      const sd0 = sx0 - ((sx0 - (d.x + spl.xStart)) % panW);
+      for (let px = sd0; px <= sx1; px += panW) {
+        ctx.beginPath(); ctx.moveTo(px, spl.divY_top); ctx.lineTo(px, spl.divY_bot); ctx.stroke();
+      }
+
+      // Structural cap + blue guide strip on both edges of divider
+      ctx.lineJoin = 'round';
+      for (const ey of [spl.divY_top, spl.divY_bot]) {
+        ctx.lineWidth = 9; ctx.strokeStyle = '#2a2a50';
+        ctx.beginPath(); ctx.moveTo(sx0, ey); ctx.lineTo(sx1, ey); ctx.stroke();
+        ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(80,180,255,0.90)';
+        ctx.beginPath(); ctx.moveTo(sx0, ey); ctx.lineTo(sx1, ey); ctx.stroke();
+      }
+    }
+
+    // Dead-end face and sealed fill in the closed corridor
+    const dex = d.x + spl.deadEndX;
+    if (dex >= x0 - fw && dex <= x1 + fw) {
+      const closeTop = spl.openUpper ? spl.divY_bot : 62;
+      const closeBot = spl.openUpper ? 442         : spl.divY_top;
+      // Hazard chevrons on the dead-end face
+      for (let y = closeTop; y < closeBot; y += 22) {
+        ctx.fillStyle = (Math.floor((y - closeTop) / 11) % 2 === 0) ? '#f5c518' : '#14142a';
+        ctx.fillRect(dex - fw, y, fw, Math.min(11, closeBot - y));
+      }
+      // Solid wall fill past the face (blocks the dead-end channel visually)
+      ctx.fillStyle = bg;
+      ctx.fillRect(dex, closeTop, x1 - dex + 4, closeBot - closeTop);
+    }
+
+    // Entrance face of the split: chevrons where divider first appears
+    const sfx = d.x + spl.xStart;
+    if (sfx >= x0 - fw && sfx <= x1 + fw) {
+      for (let y = spl.divY_top; y < spl.divY_bot; y += 22) {
+        ctx.fillStyle = (Math.floor((y - spl.divY_top) / 11) % 2 === 0) ? '#f5c518' : '#14142a';
+        ctx.fillRect(sfx, y, fw, Math.min(11, spl.divY_bot - y));
+      }
+    }
+  }
+
+  // ── Floating objects inside rooms ──
+  for (const obj of d.internalObjects) {
+    const ox = d.x + obj.xOff;
+    if (ox + obj.r < x0 || ox - obj.r > x1) continue;
+    if (obj.type === 'tv') drawTV(ox, obj.y, obj.angle);
+    else                   drawRobot(ox, obj.y, obj.angle);
+  }
+
+  // ── External entry / exit faces ──
+  drawFace(d.x + d.length, d.length);
+  drawFace(d.x + fw,       0);
+
+  // ── Internal doorway faces at each zone wall ──
+  // Corridor→Room: face shows corridor gap from the corridor side (xOff-1)
+  // Room→Corridor: face shows corridor gap from the room side (xOff+1)
+  const wallPattern = [
+    [d.x + d.wallXoffs[0],        d.wallXoffs[0] - 1],  // entry corridor right wall
+    [d.x + d.wallXoffs[1] + fw,   d.wallXoffs[1] + 1],  // room 1 right wall
+    [d.x + d.wallXoffs[2],        d.wallXoffs[2] - 1],  // corridor 1 right wall
+    [d.x + d.wallXoffs[3] + fw,   d.wallXoffs[3] + 1],  // room 2 right wall
+  ];
+  for (const [fx, xOff] of wallPattern) drawFace(fx, xOff);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Telescope craft
+// ═══════════════════════════════════════════════════════════════
+const craftImg = new Image();
+craftImg.src = 'telescope.png';
+
+const nancyImg = new Image();
+nancyImg.src = 'nancy.png';
+
+const rockyImg = new Image();
+rockyImg.src = 'rocky.png';
+
+function drawCraft(cx, cy, angle) {
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(angle);
+  // Thruster flame from the back (left) end when rising
+  if (angle < -0.05) {
+    ctx.fillStyle = 'rgba(255,140,0,0.85)';
+    ctx.beginPath();
+    ctx.moveTo(-30,0); ctx.lineTo(-44-Math.random()*8,-5); ctx.lineTo(-44-Math.random()*8,5);
+    ctx.closePath(); ctx.fill();
+  }
+  ctx.drawImage(craftImg, -30, -15, 60, 29);
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Render functions per state
+// ═══════════════════════════════════════════════════════════════
+function renderAttract(bobX, bobY) {
+  drawBg(); drawGround();
+  drawCraft(bobX, bobY, Math.sin(bobT) * 0.18);
+}
+
+function renderGame() {
+  drawBg();
+  for (const d of obstacles) {
+    if      (d.kind === 'tunnel') drawTunnel(d);
+    else if (d.kind === 'column') drawColumn(d);
+    else                          drawDebris(d);
+  }
+  drawGround();
+  drawCraft(CRAFT_X, craftY, Math.max(-0.5, Math.min(1.1, craftV / 14)));
+
+  // Score
+  ctx.fillStyle = '#fff';
+  ctx.font = '900 44px "Segoe UI", Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.shadowColor = 'rgba(0,0,0,0.5)'; ctx.shadowBlur = 6;
+  ctx.fillText(score, W/2, 58);
+  ctx.shadowBlur = 0;
+
+  // Tunnel HUD — warning when approaching, label while inside
+  const tun = obstacles.find(d => d.kind === 'tunnel');
+  if (tun) {
+    const re     = tun.x + tun.length;
+    const inside = CRAFT_X + CRAFT_R > tun.x && CRAFT_X - CRAFT_R < re;
+    if (!inside && re > CRAFT_X && re < CRAFT_X + 700) {
+      // Approaching: flashing warning (~10 s window)
+      if (Math.sin(Date.now() / 240) > 0) {
+        ctx.fillStyle = '#ffcc00';
+        ctx.font = 'bold 15px "Segoe UI", Arial';
+        ctx.textAlign = 'center';
+        ctx.shadowColor = 'rgba(255,200,0,0.7)'; ctx.shadowBlur = 10;
+        ctx.fillText('⚠  TUNNEL AHEAD  ⚠', W / 2, 92);
+        ctx.shadowBlur = 0;
+      }
+    } else if (inside) {
+      const xOff = CRAFT_X - tun.x;
+      const spl  = tun.split;
+      if (spl && xOff >= spl.xStart - 304 && xOff < spl.deadEndX) {
+        // Approaching or inside split section — flash path-choice warning
+        if (Math.sin(Date.now() / 180) > 0) {
+          ctx.fillStyle = '#ff7020';
+          ctx.font = 'bold 14px "Segoe UI", Arial';
+          ctx.textAlign = 'center';
+          ctx.shadowColor = 'rgba(255,100,0,0.85)'; ctx.shadowBlur = 12;
+          ctx.fillText('', W / 2, 92);
+          ctx.shadowBlur = 0;
+        }
+      } else {
+        ctx.fillStyle = 'rgba(80,180,255,0.65)';
+        ctx.font = '700 11px "Segoe UI", Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('', W / 2, 92);
+      }
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  End game / submit
+// ═══════════════════════════════════════════════════════════════
+function endGame() {
+  state = STATE.DEAD;
+  if (score > bestScore) bestScore = score;
+  GAME_ID = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+  document.getElementById('final-num').textContent = score;
+  document.getElementById('best-num').textContent  = bestScore;
+  const sbtn = document.getElementById('submit-btn');
+  sbtn.disabled = false; sbtn.textContent = 'Submit Score & View Leaderboard';
+  // Pre-fill nickname from last session
+  const nickEl = document.getElementById('nickname-input');
+  const saved  = localStorage.getItem('rr_nickname');
+  if (saved && !nickEl.value.trim()) nickEl.value = saved;
+  showOverlay('end-overlay');
+}
+
+function submitScore() {
+  if (submitted || !GAME_ID) return;
+  const nickEl = document.getElementById('nickname-input');
+  const nick   = nickEl.value.trim();
+  if (!nick) {
+    nickEl.classList.remove('shake'); void nickEl.offsetWidth;
+    nickEl.classList.add('shake');
+    nickEl.placeholder = 'Please enter a nickname!';
+    setTimeout(() => { nickEl.classList.remove('shake'); nickEl.focus(); }, 340);
+    return;
+  }
+  PLAYER_NAME = nick;
+  localStorage.setItem('rr_nickname', PLAYER_NAME);
+  submitted = true;
+  const sbtn = document.getElementById('submit-btn');
+  sbtn.disabled = true; sbtn.textContent = 'Submitted ✓  — see leaderboard below';
+  _stSetValue({ gameId: GAME_ID, player: PLAYER_NAME, score });
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Input
+// ═══════════════════════════════════════════════════════════════
+function onTap(e) {
+  if (e) e.preventDefault();
+  if (state === STATE.READY)   { beginPlay(); return; }
+  if (state === STATE.PLAYING) { craftV = FLAP; }
+}
+canvas.addEventListener('mousedown',  onTap);
+canvas.addEventListener('touchstart', onTap, { passive: false });
+document.addEventListener('keydown', e => {
+  if (e.code !== 'Space' && e.key !== ' ') return;
+  if (document.activeElement === document.getElementById('nickname-input')) return;
+  e.preventDefault();
+  if (state === STATE.READY || state === STATE.PLAYING) onTap(null);
+});
+document.getElementById('nickname-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); submitScore(); }
+});
+
+// ═══════════════════════════════════════════════════════════════
+//  Boot
+// ═══════════════════════════════════════════════════════════════
+initScene();
+loop();
+</script>
+</body>
+</html>
