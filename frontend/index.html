@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -1680,12 +1681,20 @@ function submitScore() {
 //  Input
 // ═══════════════════════════════════════════════════════════════
 function onTap(e) {
-  if (e) e.preventDefault();
-  if (state === STATE.READY)   { beginPlay(); return; }
-  if (state === STATE.PLAYING) { craftV = FLAP; }
+  // Only act — and only swallow the gesture — in the two states where a tap
+  // means "fly". In ATTRACT/DEAD we let the event through so the overlay
+  // buttons (LAUNCH, Submit, Play Again) and the nickname input still work.
+  if (state === STATE.READY)   { if (e) e.preventDefault(); beginPlay();   return; }
+  if (state === STATE.PLAYING) { if (e) e.preventDefault(); craftV = FLAP; return; }
 }
-canvas.addEventListener('mousedown',  onTap);
-canvas.addEventListener('touchstart', onTap, { passive: false });
+// Bind to the whole container, not just the canvas: the GET READY / GAME OVER
+// overlays sit on top of the canvas, so a tap during READY would otherwise be
+// swallowed by the overlay and never reach the canvas. Listening on the shared
+// parent catches the tap whichever layer it lands on (this is what makes
+// tap-to-start work on mobile, where there's no spacebar fallback).
+const gameContainer = document.getElementById('game-container');
+gameContainer.addEventListener('mousedown',  onTap);
+gameContainer.addEventListener('touchstart', onTap, { passive: false });
 document.addEventListener('keydown', e => {
   if (e.code !== 'Space' && e.key !== ' ') return;
   if (document.activeElement === document.getElementById('nickname-input')) return;
