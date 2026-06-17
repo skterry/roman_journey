@@ -24,7 +24,7 @@ body {
   border: 2.5px solid #1a3a7a;
   box-shadow: 0 8px 36px rgba(11,61,145,0.50);
   /* Taps are "fly" inputs, never scroll/zoom gestures. Declaring touch-action
-     here (on the element that owns the touchstart listener) lets the browser
+     here (on the element that owns the pointerdown listener) lets the browser
      skip gesture/scroll hit-testing instead of stalling the main thread on each
      tap — that wait was the on-tap stutter. tap-highlight/user-select off kills
      the highlight-flash repaint that also hitched a frame. */
@@ -32,6 +32,7 @@ body {
   -webkit-tap-highlight-color: transparent;
   -webkit-user-select: none;
   user-select: none;
+  -webkit-touch-callout: none;  /* no long-press callout menu on the play area */
 }
 #main-canvas {
   display: block;
@@ -322,7 +323,7 @@ const GRAVITY  = 0.1;
 const FLAP     = -3.0;
 const MAX_FALL = 4;
 const SCROLL   = 1.2;
-const SHOW_THRUSTER = false;  // TEST: thruster flame on tap disabled — flip to true to restore
+const SHOW_THRUSTER = true;   // thruster flame on rise (ruled out as a stutter source)
 const SPACING  = 185;   // x-distance between obstacle waves
 const COL_W    = 50;    // width of column-pair obstacles
 const GAP      = 118;   // vertical gap height in column pairs
@@ -1776,21 +1777,27 @@ function submitScore() {
 // ═══════════════════════════════════════════════════════════════
 //  Input
 // ═══════════════════════════════════════════════════════════════
-function onTap(e) {
-  // Only act — and only swallow the gesture — in the two states where a tap
-  // means "fly". In ATTRACT/DEAD we let the event through so the overlay
-  // buttons (LAUNCH, Submit, Play Again) and the nickname input still work.
-  if (state === STATE.READY)   { if (e) e.preventDefault(); beginPlay();   return; }
-  if (state === STATE.PLAYING) { if (e) e.preventDefault(); craftV = FLAP; return; }
+function onTap() {
+  // Act only in the two states where a press means "fly". In ATTRACT/DEAD this
+  // is a no-op so the overlay buttons (LAUNCH, Submit, Play Again) and the
+  // nickname input keep working — we no longer cancel the event at all.
+  if (state === STATE.READY)   { beginPlay();   return; }
+  if (state === STATE.PLAYING) { craftV = FLAP; return; }
 }
 // Bind to the whole container, not just the canvas: the GET READY / GAME OVER
 // overlays sit on top of the canvas, so a tap during READY would otherwise be
 // swallowed by the overlay and never reach the canvas. Listening on the shared
 // parent catches the tap whichever layer it lands on (this is what makes
 // tap-to-start work on mobile, where there's no spacebar fallback).
+//
+// A single PASSIVE pointerdown covers mouse, touch and pen with one event per
+// press (no mousedown+touchstart duplication). Passive + no preventDefault means
+// the browser never blocks the frame waiting to see if this handler cancels the
+// gesture — that synchronous wait was the one-frame hitch felt on every tap.
+// Scroll/zoom are already suppressed by the container's touch-action:none, so
+// there is nothing left to preventDefault.
 const gameContainer = document.getElementById('game-container');
-gameContainer.addEventListener('mousedown',  onTap);
-gameContainer.addEventListener('touchstart', onTap, { passive: false });
+gameContainer.addEventListener('pointerdown', onTap, { passive: true });
 document.addEventListener('keydown', e => {
   if (e.code !== 'Space' && e.key !== ' ') return;
   if (document.activeElement === document.getElementById('nickname-input')) return;
