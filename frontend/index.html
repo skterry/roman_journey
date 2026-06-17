@@ -322,6 +322,7 @@ const GRAVITY  = 0.1;
 const FLAP     = -3.0;
 const MAX_FALL = 4;
 const SCROLL   = 1.2;
+const SHOW_THRUSTER = false;  // TEST: thruster flame on tap disabled — flip to true to restore
 const SPACING  = 185;   // x-distance between obstacle waves
 const COL_W    = 50;    // width of column-pair obstacles
 const GAP      = 118;   // vertical gap height in column pairs
@@ -1661,7 +1662,7 @@ rockyImg.src = 'rocky.png';
 function drawCraft(cx, cy, angle) {
   ctx.save(); ctx.translate(cx, cy); ctx.rotate(angle);
   // Thruster flame from the back (left) end when rising
-  if (angle < -0.05) {
+  if (SHOW_THRUSTER && angle < -0.05) {
     ctx.fillStyle = 'rgba(255,140,0,0.85)';
     ctx.beginPath();
     ctx.moveTo(-30,0); ctx.lineTo(-44-Math.random()*8,-5); ctx.lineTo(-44-Math.random()*8,5);
