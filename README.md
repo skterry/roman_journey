@@ -17,16 +17,15 @@ A Flappy-Bird-style arcade game themed around the [Nancy Grace Roman Space Teles
 
 ## About the Game
 
-Pilot the Roman Space Telescope through a field of drifting space debris. Click the
-screen (or press the **Space** bar) to fire the thrusters and keep the telescope aloft —
-gravity is always pulling it back down. Thread the gap in each obstacle to score, and
-see how far you can fly before a collision ends the run.
+Navigate the Roman telescope through space as it travels to L2. Dodge obstacles and navigate through
+precarious structures and tunnels to get Roman to its destination. Click or tap the
+screen (or press the **Space** bar) to fire the thrusters and keep the telescope flying straight. 
+See how far you can fly before a collision ends the run.
 
 ### How it works
 
-- **One-button flight** — click or press Space to flap; the telescope rises, then falls under gravity.
-- **Endless side-scroller** — space-debris columns scroll in from the right with a gap to fly through.
-- **Score** — +1 for every gap cleared. A single collision (with debris, the ceiling, or the lunar surface) ends the run.
+- **One-button flight** — click, tap the screen (on mobile), or press Spacebar to fly.
+- **Score** — +1 for every gap or obstacle cleared. A single collision (with debris, the ceiling, walls, etc) ends the run.
 - **All-time leaderboard** — after a run, enter your nickname and submit your best score to the global rankings.
 
 ---
@@ -52,13 +51,13 @@ the all-time high-score leaderboard.
 
 ### `frontend/index.html`
 
-The full game UI — an HTML canvas running the Flappy-style physics, obstacle scrolling,
+The full game UI — an HTML canvas running the Flappy bird-style physics, obstacle scrolling,
 collision detection, and rendering — inside an iframe. Communicates the completed run's
 score back to Python through the Streamlit component `postMessage` protocol.
 
 ---
 
-## Installation & Running
+## Installation & Running (locally)
 
 **Requirements:** Python 3.9+
 
@@ -74,9 +73,6 @@ score back to Python through the Streamlit component `postMessage` protocol.
    ```bash
    pip install -r requirements.txt
    ```
-
-3. Add a `.streamlit/secrets.toml` with your Google service account credentials
-   (a `[gcp_service_account]` table including `spreadsheet_id`).
 
 4. Launch the app:
 
