@@ -350,6 +350,7 @@ let waveCount = 4;
 // Tunnel scheduler
 let tunnelPending       = false;
 let tunnelSplit         = false; // true on every 2nd tunnel (80, 160, … pts)
+let tunnelBounce        = false; // true on alternating tunnels → Rocky bounces in Room 1
 let lastTunnelThreshold = 0;
 
 function rand(a, b) { return a + Math.random() * (b - a); }
@@ -506,7 +507,7 @@ function spawnWave(baseX) {
   else spawnGroup(baseX);
 }
 
-function spawnTunnel(baseX, isSplit = false) {
+function spawnTunnel(baseX, isSplit = false, bounceRocky = false) {
   const ROOM_H = 380;
   const COR_H  = TUNNEL_GAP;
   const midCY  = (H - GROUND_H) / 2;
@@ -564,15 +565,33 @@ function spawnTunnel(baseX, isSplit = false) {
     { type: 'robot', xOff: rand(r2s + 340, r2s + 490), y: midCY + rand(-100, 100), r: 30, angle: Math.random() * Math.PI * 2, spin: rand(0.006, 0.012) },
   ];
 
-  // Room 1 furniture placement (xOff 300–1000): desk group and Rocky on
-  // opposite sides, randomized per ship so they never overlap.
+  // Room 1 furniture (xOff 300–1000): desk group is static. Rocky stands on the
+  // floor in most structures, but in alternating ones (bounceRocky) he drifts and
+  // bounces around the chamber walls — see updateGame / drawTunnel.
   const deskLeft = Math.random() < 0.5;
   const leftX  = rand(410, 590);
   const rightX = rand(710, 930);
+  const rockyStartX = deskLeft ? rightX : leftX;  // opposite the desk
   const room1 = {
-    deskXOff:  deskLeft ? leftX  : rightX,
-    rockyXOff: deskLeft ? rightX : leftX,
+    deskXOff: deskLeft ? leftX : rightX,
+    rockyBounces: bounceRocky,
+    rockyXOff: rockyStartX,                        // used for the static (floor) variant
   };
+  if (bounceRocky) {
+    // Bounce bounds: chamber interior inset so the 46px sprite never clips a wall.
+    const ROCKY_SIZE = 46, rHalf = ROCKY_SIZE / 2, rPad = 16;
+    const roomTopY = midCY - ROOM_H / 2, roomBotY = midCY + ROOM_H / 2;
+    room1.rMinX = 300  + rHalf + rPad;
+    room1.rMaxX = 1000 - rHalf - rPad;
+    room1.rMinY = roomTopY + rHalf + rPad;
+    room1.rMaxY = roomBotY - rHalf - rPad;
+    room1.rocky = {
+      x:  rockyStartX,                             // start where he'd otherwise stand
+      y:  rand(room1.rMinY, room1.rMaxY),
+      vx: (Math.random() < 0.5 ? -1 : 1) * rand(0.35, 0.55),
+      vy: (Math.random() < 0.5 ? -1 : 1) * rand(0.35, 0.55),
+    };
+  }
 
   obstacles.push({
     kind: 'tunnel',
@@ -615,7 +634,7 @@ function beginPlay() {
   state = STATE.PLAYING; craftV = FLAP;
   score = 0; submitted = false; obstacles = [];
   waveType = WAVE.FLOAT; waveCount = 4; // first 4 waves guaranteed float
-  tunnelPending = false; tunnelSplit = false; lastTunnelThreshold = 0;
+  tunnelPending = false; tunnelSplit = false; tunnelBounce = false; lastTunnelThreshold = 0;
   shootingStar = null; scheduleShootingStar();
   let sx = W + 140;
   for (let g = 0; g < 4; g++) { spawnWave(sx); sx += SPACING; }
@@ -623,10 +642,23 @@ function beginPlay() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  Main loop
+//  Main loop — fixed-timestep simulation, decoupled from render rate
+//  so the game runs at the same real-time speed on every device (a slow
+//  phone simply draws fewer frames; it never runs in slow-motion).
 // ═══════════════════════════════════════════════════════════════
-function loop() {
-  rafHandle = requestAnimationFrame(loop);
+// TARGET_FPS sets the real-time game speed on EVERY device. 120 matches the feel
+// of a 120Hz desktop (where the old per-frame code effectively ran). A 60Hz screen
+// runs 2 physics ticks per rendered frame to keep the same speed; a slow phone runs
+// however many it needs — it draws fewer frames but never plays in slow-motion.
+const TARGET_FPS = 120;
+const SIM_STEP   = 1000 / TARGET_FPS;  // one physics tick (ms)
+const MAX_FRAME  = 100;       // drop time beyond this (tab switch) to avoid catch-up spirals
+const MAX_STEPS  = 12;        // ceiling on ticks per frame (covers down to ~10fps at 120 target)
+let _lastT = 0, _acc = 0;
+
+// One fixed physics tick. Star/shooting-star drift run in every state; craft
+// physics only while playing; the idle bob while in attract/ready.
+function stepSim() {
   for (const s of stars) {
     s.x -= SCROLL * s.layer;
     if (s.x < -2) { s.x = W + 2; s.y = Math.random() * (H - GROUND_H); }
@@ -634,15 +666,34 @@ function loop() {
   updateShootingStar();
   if (state === STATE.ATTRACT || state === STATE.READY) {
     bobT += 0.045;
-    const bobX = state === STATE.ATTRACT ? W / 2 : CRAFT_X;
-    const bobY = H / 2 + Math.sin(bobT) * 14;
-    craftY = bobY;
-    renderAttract(bobX, bobY);
+    craftY = H / 2 + Math.sin(bobT) * 14;
   } else if (state === STATE.PLAYING) {
-    updateGame(); renderGame();
-  } else {
-    renderGame();  // frozen frame under end overlay
+    updateGame();
   }
+}
+
+function render() {
+  if (state === STATE.ATTRACT || state === STATE.READY) {
+    const bobX = state === STATE.ATTRACT ? W / 2 : CRAFT_X;
+    renderAttract(bobX, craftY);
+  } else {
+    renderGame();  // playing, or frozen frame under end overlay
+  }
+}
+
+function loop(now) {
+  rafHandle = requestAnimationFrame(loop);
+  now = now || performance.now();
+  if (!_lastT) { _lastT = now; render(); return; }  // establish time baseline
+  let elapsed = now - _lastT;
+  _lastT = now;
+  if (elapsed > MAX_FRAME) elapsed = MAX_FRAME;
+  _acc += elapsed;
+  // Advance as many fixed ticks as real time demands (capped to bound work on
+  // a struggling device); render once afterwards.
+  let steps = 0;
+  while (_acc >= SIM_STEP && steps < MAX_STEPS) { stepSim(); _acc -= SIM_STEP; steps++; }
+  render();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -657,6 +708,7 @@ function updateGame() {
   if (score > 0 && th > lastTunnelThreshold) {
     tunnelPending = true;
     tunnelSplit = (th % 2 === 0);
+    tunnelBounce = (th % 2 === 0);  // structure #1 floor, #2 bounces, #3 floor, …
     lastTunnelThreshold = th;
   }
 
@@ -665,6 +717,15 @@ function updateGame() {
     // Slowly rotate the robots/TV floating inside each tunnel (clockwise)
     if (d.kind === 'tunnel') {
       for (const obj of d.internalObjects) obj.angle += obj.spin;
+      // In bouncing structures, drift Rocky around Room 1, reflecting off the walls.
+      if (d.room1.rockyBounces) {
+        const r1 = d.room1, rk = r1.rocky;
+        rk.x += rk.vx; rk.y += rk.vy;
+        if      (rk.x < r1.rMinX) { rk.x = r1.rMinX; rk.vx =  Math.abs(rk.vx); }
+        else if (rk.x > r1.rMaxX) { rk.x = r1.rMaxX; rk.vx = -Math.abs(rk.vx); }
+        if      (rk.y < r1.rMinY) { rk.y = r1.rMinY; rk.vy =  Math.abs(rk.vy); }
+        else if (rk.y > r1.rMaxY) { rk.y = r1.rMaxY; rk.vy = -Math.abs(rk.vy); }
+      }
     }
     // Tunnel earns no points (scored:true from birth); debris/columns score normally
     if (!d.scored && d.x + d.w / 2 < CRAFT_X - CRAFT_R) { d.scored = true; score++; }
@@ -681,8 +742,8 @@ function updateGame() {
     : W;
   if (maxX < W + SPACING) {
     if (tunnelPending) {
-      spawnTunnel(maxX + SPACING, tunnelSplit);
-      tunnelPending = false; tunnelSplit = false;
+      spawnTunnel(maxX + SPACING, tunnelSplit, tunnelBounce);
+      tunnelPending = false; tunnelSplit = false; tunnelBounce = false;
     } else {
       spawnWave(maxX + rand(SPACING * 0.9, SPACING * 1.2));
     }
@@ -733,10 +794,13 @@ function updateGame() {
 // ═══════════════════════════════════════════════════════════════
 //  Background + ground
 // ═══════════════════════════════════════════════════════════════
+let _skyGrad = null;
 function drawBg() {
-  const sky = ctx.createLinearGradient(0, 0, 0, H);
-  sky.addColorStop(0, '#0a0e2a'); sky.addColorStop(0.6, '#13193f'); sky.addColorStop(1, '#1c1140');
-  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H);
+  if (!_skyGrad) {
+    _skyGrad = ctx.createLinearGradient(0, 0, 0, H);
+    _skyGrad.addColorStop(0, '#0a0e2a'); _skyGrad.addColorStop(0.6, '#13193f'); _skyGrad.addColorStop(1, '#1c1140');
+  }
+  ctx.fillStyle = _skyGrad; ctx.fillRect(0, 0, W, H);
   for (const s of stars) {
     ctx.globalAlpha = s.layer > 0.4 ? 0.9 : 0.5;
     ctx.fillStyle = '#fff';
@@ -746,10 +810,13 @@ function drawBg() {
   drawShootingStar();
 }
 
+let _groundGrad = null;
 function drawGround() {
-  const g = ctx.createLinearGradient(0, H-GROUND_H, 0, H);
-  g.addColorStop(0, '#3a3550'); g.addColorStop(1, '#211d33');
-  ctx.fillStyle = g; ctx.fillRect(0, H-GROUND_H, W, GROUND_H);
+  if (!_groundGrad) {
+    _groundGrad = ctx.createLinearGradient(0, H-GROUND_H, 0, H);
+    _groundGrad.addColorStop(0, '#3a3550'); _groundGrad.addColorStop(1, '#211d33');
+  }
+  ctx.fillStyle = _groundGrad; ctx.fillRect(0, H-GROUND_H, W, GROUND_H);
   ctx.fillStyle = 'rgba(255,255,255,0.06)';
   for (let x = 0; x < W; x += 26) {
     ctx.beginPath();
@@ -1229,6 +1296,7 @@ function getTunnelShape(d, xOff) {
   };
 }
 
+let _tunnelBgGrad = null, _tunnelIntGrad = null;  // constant gradients, built once
 function drawTunnel(d) {
   const x0   = Math.max(0, d.x);
   const x1   = Math.min(W, d.x + d.length);
@@ -1247,8 +1315,11 @@ function drawTunnel(d) {
   const n = xs.length;
 
   // ── Wall fill ──
-  const bg = ctx.createLinearGradient(0, 0, 0, H);
-  bg.addColorStop(0, '#13132a'); bg.addColorStop(1, '#1e1e38');
+  if (!_tunnelBgGrad) {
+    _tunnelBgGrad = ctx.createLinearGradient(0, 0, 0, H);
+    _tunnelBgGrad.addColorStop(0, '#13132a'); _tunnelBgGrad.addColorStop(1, '#1e1e38');
+  }
+  const bg = _tunnelBgGrad;
   ctx.fillStyle = bg;
 
   ctx.beginPath(); // top wall polygon
@@ -1272,11 +1343,13 @@ function drawTunnel(d) {
   ctx.closePath();
   ctx.clip();
 
-  const intFill = ctx.createLinearGradient(0, 0, 0, H);
-  intFill.addColorStop(0,   '#70798c');
-  intFill.addColorStop(0.5, '#a0a8b5');
-  intFill.addColorStop(1,   '#70798c');
-  ctx.fillStyle = intFill;
+  if (!_tunnelIntGrad) {
+    _tunnelIntGrad = ctx.createLinearGradient(0, 0, 0, H);
+    _tunnelIntGrad.addColorStop(0,   '#70798c');
+    _tunnelIntGrad.addColorStop(0.5, '#a0a8b5');
+    _tunnelIntGrad.addColorStop(1,   '#70798c');
+  }
+  ctx.fillStyle = _tunnelIntGrad;
   ctx.fillRect(x0, 0, x1 - x0, H);
 
   // Horizontal hull-plate seams (fixed Y — give the corridor texture and depth)
@@ -1432,17 +1505,26 @@ function drawTunnel(d) {
     }
   }
 
-  // ── Rocky figure standing on the floor (Room 1, randomized position) ──
-  const rockyXOff = d.room1.rockyXOff;
-  const rockyAbsX = d.x + rockyXOff;
-  if (rockyAbsX + 40 >= x0 && rockyAbsX - 40 <= x1) {
-    const rsh = getTunnelShape(d, rockyXOff);
-    if (rsh.gapH > 200) {
-      const rockyFloorY = rsh.cy + rsh.gapH / 2;
-      const rockySize = 46;                       // source is 640×640 (square)
-      const rockyX = rockyAbsX - rockySize / 2;
-      const rockyY = rockyFloorY - rockySize + 2; // feet planted on the floor
-      if (rockyImg.complete && rockyImg.naturalWidth > 0) {
+  // ── Rocky in Room 1: floor-planted in most structures, drifting/bouncing in
+  //    the alternating (rockyBounces) ones. The drop shadow is drawn with the
+  //    sprite each frame, so it tracks Rocky as he moves and bounces. ──
+  {
+    const r1 = d.room1;
+    const rockySize = 46;                  // source is 640×640 (square)
+    const rockyXOff = r1.rockyBounces ? r1.rocky.x : r1.rockyXOff;
+    const rockyAbsX = d.x + rockyXOff;
+    if (rockyAbsX + 40 >= x0 && rockyAbsX - 40 <= x1) {
+      let rockyX = rockyAbsX - rockySize / 2;
+      let rockyY;
+      let visible = true;
+      if (r1.rockyBounces) {
+        rockyY = r1.rocky.y - rockySize / 2;   // rocky.y is the sprite centre
+      } else {
+        const rsh = getTunnelShape(d, rockyXOff);
+        visible = rsh.gapH > 200;              // only once the chamber has opened
+        rockyY = rsh.cy + rsh.gapH / 2 - rockySize + 2; // feet planted on the floor
+      }
+      if (visible && rockyImg.complete && rockyImg.naturalWidth > 0) {
         ctx.save();
         ctx.shadowColor = 'rgba(0,0,0,0.28)';
         ctx.shadowBlur = 10;
