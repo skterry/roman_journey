@@ -23,13 +23,23 @@ body {
   overflow: hidden;
   border: 2.5px solid #1a3a7a;
   box-shadow: 0 8px 36px rgba(11,61,145,0.50);
+  /* Taps are "fly" inputs, never scroll/zoom gestures. Declaring touch-action
+     here (on the element that owns the touchstart listener) lets the browser
+     skip gesture/scroll hit-testing instead of stalling the main thread on each
+     tap — that wait was the on-tap stutter. tap-highlight/user-select off kills
+     the highlight-flash repaint that also hitched a frame. */
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
 }
 #main-canvas {
   display: block;
   width: 100%;
   height: auto;
   cursor: pointer;
-  touch-action: manipulation;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* ── overlays ── */
