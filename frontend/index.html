@@ -820,6 +820,27 @@ const TARGET_FPS = 120;
 const SIM_STEP   = 1000 / TARGET_FPS;  // reference frame time (ms) the speed is tuned to
 const MAX_FACTOR = 4;                  // clamp after stalls / very low fps so the craft eases
                                        // off instead of lurching (and can't skip obstacles)
+
+// ── Mobile render-cadence cap ──────────────────────────────────
+// Touch-primary devices (phones/tablets) cap the render rate at 60fps; desktops
+// keep their native rate (typically 120). At 120Hz the per-frame budget is only
+// ~8.3ms, so the few ms of main-thread work a *tap* costs (gesture hit-testing +
+// synthesised compat events) overruns the frame — the next frame lands late, its
+// elapsed time spikes, and simFactor scales the whole scene forward in one big
+// step: the on-tap "stutter". Drawing every other 120Hz tick gives a ~16.6ms
+// budget that absorbs that touch cost, so the cadence stays even through a tap.
+// TARGET_FPS stays 120 (the speed reference), so simFactor just lands at ~2.0 per
+// drawn frame on mobile → identical real-time speed, half the frames.
+// Detection is capability-based (not user-agent): a touch-primary device reports
+// a coarse pointer and no hover; touch *laptops* keep a fine pointer + hover and
+// are correctly left at full rate.
+const THROTTLE_60 = !!(window.matchMedia
+  && window.matchMedia('(pointer: coarse)').matches
+  && window.matchMedia('(hover: none)').matches);
+const MIN_FRAME_MS = THROTTLE_60 ? 1000 / 60 : 0;  // 0 = no cap (desktop)
+const FRAME_SLOP   = 1000 / 240;                   // ~4.2ms tolerance so a 120Hz display
+                                                   // lands cleanly on 60fps, not 40
+
 let _lastT = 0;
 // simFactor = how many reference (1/120 s) frames of motion to apply this frame.
 // 1.0 at 120fps, 2.0 at 60fps, 4.0 at 30fps → same real-time speed everywhere,
@@ -897,6 +918,10 @@ function loop(now) {
   now = now || performance.now();
   if (!_lastT) { _lastT = now; render(); return; }  // establish time baseline
   const elapsed = now - _lastT;
+  // Mobile cadence cap: skip rAF ticks that arrive sooner than the 60fps interval
+  // (minus a small slop so a 120Hz display lands on 60fps, not 40). _lastT only
+  // advances on frames we actually process, so the elapsed step stays correct.
+  if (MIN_FRAME_MS && elapsed < MIN_FRAME_MS - FRAME_SLOP) return;
   _lastT = now;
   // Scale this frame's motion by real elapsed time, normalised to the 120fps
   // reference. One smooth, time-proportional update per drawn frame → identical
