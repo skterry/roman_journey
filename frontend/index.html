@@ -197,8 +197,9 @@ body {
 .btn-launch:hover  { background: #0d4db5; box-shadow: 0 0 36px rgba(95,168,255,0.75); }
 .btn-launch:active { transform: scale(0.96); }
 .btn-launch:disabled { background: #2d3a55; box-shadow: none; cursor: progress; }
-/* launch buttons stacked: full-res LAUNCH + retro 16-BIT */
+/* launch button row (16-BIT MODE removed — see commented .btn-16bit block below to restore) */
 .launch-row { display: flex; flex-direction: column; align-items: center; gap: 13px; }
+/* ── 16-BIT MODE button — removed from UI; uncomment to re-introduce ──
 .btn-16bit {
   padding: 11px 30px;
   font-size: 0.9rem;
@@ -206,7 +207,7 @@ body {
   background: #7b2d8e;
   color: #fff;
   border: 2px solid #d77ff0;
-  border-radius: 4px;                 /* squared, pixel-era look */
+  border-radius: 4px;                 (squared, pixel-era look)
   cursor: pointer;
   letter-spacing: 1.5px;
   box-shadow: 0 0 18px rgba(190,90,230,0.45), 0 3px 10px rgba(0,0,0,0.35);
@@ -215,6 +216,7 @@ body {
 .btn-16bit:hover    { background: #9436ab; box-shadow: 0 0 26px rgba(190,90,230,0.70); }
 .btn-16bit:active   { transform: scale(0.96); }
 .btn-16bit:disabled { background: #3a2d44; border-color: #5a4a66; box-shadow: none; cursor: progress; }
+*/
 .btn-submit {
   width: 100%;
   padding: 12px 20px;
@@ -260,12 +262,14 @@ body {
 <div id="game-container">
   <canvas id="main-canvas" width="400" height="560"></canvas>
 
-  <!-- ATTRACT: game title + launch buttons (full-res / 16-bit) -->
+  <!-- ATTRACT: game title + launch button -->
   <div id="start-overlay" class="overlay active">
     <div class="game-title">ROMAN TELESCOPE:<br>Journey to L2!</div>
     <div class="launch-row">
       <button class="btn-launch" id="launch-btn" onclick="goReady(false)" disabled>LAUNCH</button>
+      <!-- 16-BIT MODE removed — uncomment to re-introduce:
       <button class="btn-16bit" id="launch-16bit-btn" onclick="goReady(true)" disabled>▦ 16-BIT MODE</button>
+      -->
     </div>
   </div>
 
@@ -313,7 +317,8 @@ window.addEventListener('message', e => {
   if (!e.data || e.data.type !== 'streamlit:render') return;
   if (!_stReady) {
     document.getElementById('launch-btn').disabled = false;
-    document.getElementById('launch-16bit-btn').disabled = false;
+    // 16-BIT MODE removed — uncomment to re-introduce:
+    // document.getElementById('launch-16bit-btn').disabled = false;
     _stReady = true;
     updateHeight();
   }
@@ -787,9 +792,9 @@ function showOverlay(id) {
 }
 
 function goReady(pixel) {
-  // LAUNCH passes false, 16-BIT MODE passes true; "Play Again" passes nothing,
-  // so it preserves whichever mode the player last chose.
-  if (pixel !== undefined) pixelMode = pixel;
+  // LAUNCH passes false; "Play Again" passes nothing. (16-BIT MODE removed — it
+  // passed true to enable the pixel filter; uncomment below to re-introduce.)
+  // if (pixel !== undefined) pixelMode = pixel;
   craftY = H / 2; craftV = 0;
   state  = STATE.READY;
   showOverlay('ready-overlay');
@@ -820,27 +825,6 @@ const TARGET_FPS = 120;
 const SIM_STEP   = 1000 / TARGET_FPS;  // reference frame time (ms) the speed is tuned to
 const MAX_FACTOR = 4;                  // clamp after stalls / very low fps so the craft eases
                                        // off instead of lurching (and can't skip obstacles)
-
-// ── Mobile render-cadence cap ──────────────────────────────────
-// Touch-primary devices (phones/tablets) cap the render rate at 60fps; desktops
-// keep their native rate (typically 120). At 120Hz the per-frame budget is only
-// ~8.3ms, so the few ms of main-thread work a *tap* costs (gesture hit-testing +
-// synthesised compat events) overruns the frame — the next frame lands late, its
-// elapsed time spikes, and simFactor scales the whole scene forward in one big
-// step: the on-tap "stutter". Drawing every other 120Hz tick gives a ~16.6ms
-// budget that absorbs that touch cost, so the cadence stays even through a tap.
-// TARGET_FPS stays 120 (the speed reference), so simFactor just lands at ~2.0 per
-// drawn frame on mobile → identical real-time speed, half the frames.
-// Detection is capability-based (not user-agent): a touch-primary device reports
-// a coarse pointer and no hover; touch *laptops* keep a fine pointer + hover and
-// are correctly left at full rate.
-const THROTTLE_60 = !!(window.matchMedia
-  && window.matchMedia('(pointer: coarse)').matches
-  && window.matchMedia('(hover: none)').matches);
-const MIN_FRAME_MS = THROTTLE_60 ? 1000 / 60 : 0;  // 0 = no cap (desktop)
-const FRAME_SLOP   = 1000 / 240;                   // ~4.2ms tolerance so a 120Hz display
-                                                   // lands cleanly on 60fps, not 40
-
 let _lastT = 0;
 // simFactor = how many reference (1/120 s) frames of motion to apply this frame.
 // 1.0 at 120fps, 2.0 at 60fps, 4.0 at 30fps → same real-time speed everywhere,
@@ -869,7 +853,11 @@ function stepSim() {
 //  resolution, quantised to a small palette, and scaled back up with
 //  nearest-neighbour sampling. This single cheap pass turns EVERY visual
 //  16-bit at once — no per-asset re-rendering needed.
+//  REMOVED from the UI — uncomment this whole block (plus the .btn-16bit CSS,
+//  the launch-16bit-btn button + enable line, the goReady pixelMode line, and
+//  the applyPixelFilter() call in render()) to re-introduce 16-BIT MODE.
 // ═══════════════════════════════════════════════════════════════
+/*
 let pixelMode = false;
 const PIX_W = 160, PIX_H = 224;          // 16-bit internal resolution (matches the 400×560 ratio)
 const _pcanvas = document.createElement('canvas');
@@ -902,6 +890,7 @@ function applyPixelFilter() {
   ctx.drawImage(_pcanvas, 0, 0, PIX_W, PIX_H, 0, 0, W, H);
   ctx.imageSmoothingEnabled = true;
 }
+*/
 
 function render() {
   if (state === STATE.ATTRACT || state === STATE.READY) {
@@ -910,7 +899,8 @@ function render() {
   } else {
     renderGame();  // playing, or frozen frame under end overlay
   }
-  if (pixelMode) applyPixelFilter();   // 16-bit mode: post-process the whole frame
+  // 16-BIT MODE removed — uncomment (with the pixel filter block above) to re-introduce:
+  // if (pixelMode) applyPixelFilter();   // post-process the whole frame
 }
 
 function loop(now) {
@@ -918,10 +908,6 @@ function loop(now) {
   now = now || performance.now();
   if (!_lastT) { _lastT = now; render(); return; }  // establish time baseline
   const elapsed = now - _lastT;
-  // Mobile cadence cap: skip rAF ticks that arrive sooner than the 60fps interval
-  // (minus a small slop so a 120Hz display lands on 60fps, not 40). _lastT only
-  // advances on frames we actually process, so the elapsed step stays correct.
-  if (MIN_FRAME_MS && elapsed < MIN_FRAME_MS - FRAME_SLOP) return;
   _lastT = now;
   // Scale this frame's motion by real elapsed time, normalised to the 120fps
   // reference. One smooth, time-proportional update per drawn frame → identical
