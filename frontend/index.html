@@ -925,7 +925,7 @@ function updateGame() {
   craftY += craftV * simFactor;
 
   // Queue a tunnel every 40 points; even-numbered triggers (80, 160 …) get split paths
-  const th = Math.floor(score / 3);
+  const th = Math.floor(score / 25);
   if (score > 0 && th > lastTunnelThreshold) {
     tunnelPending = true;
     tunnelSplit = (th % 2 === 0);
