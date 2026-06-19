@@ -197,6 +197,24 @@ body {
 .btn-launch:hover  { background: #0d4db5; box-shadow: 0 0 36px rgba(95,168,255,0.75); }
 .btn-launch:active { transform: scale(0.96); }
 .btn-launch:disabled { background: #2d3a55; box-shadow: none; cursor: progress; }
+/* launch buttons stacked: full-res LAUNCH + retro 16-BIT */
+.launch-row { display: flex; flex-direction: column; align-items: center; gap: 13px; }
+.btn-16bit {
+  padding: 11px 30px;
+  font-size: 0.9rem;
+  font-weight: 800;
+  background: #7b2d8e;
+  color: #fff;
+  border: 2px solid #d77ff0;
+  border-radius: 4px;                 /* squared, pixel-era look */
+  cursor: pointer;
+  letter-spacing: 1.5px;
+  box-shadow: 0 0 18px rgba(190,90,230,0.45), 0 3px 10px rgba(0,0,0,0.35);
+  transition: background 0.18s, transform 0.1s, box-shadow 0.18s;
+}
+.btn-16bit:hover    { background: #9436ab; box-shadow: 0 0 26px rgba(190,90,230,0.70); }
+.btn-16bit:active   { transform: scale(0.96); }
+.btn-16bit:disabled { background: #3a2d44; border-color: #5a4a66; box-shadow: none; cursor: progress; }
 .btn-submit {
   width: 100%;
   padding: 12px 20px;
@@ -242,10 +260,13 @@ body {
 <div id="game-container">
   <canvas id="main-canvas" width="400" height="560"></canvas>
 
-  <!-- ATTRACT: game title + launch button -->
+  <!-- ATTRACT: game title + launch buttons (full-res / 16-bit) -->
   <div id="start-overlay" class="overlay active">
     <div class="game-title">ROMAN TELESCOPE:<br>Journey to L2!</div>
-    <button class="btn-launch" id="launch-btn" onclick="goReady()" disabled>LAUNCH</button>
+    <div class="launch-row">
+      <button class="btn-launch" id="launch-btn" onclick="goReady(false)" disabled>LAUNCH</button>
+      <button class="btn-16bit" id="launch-16bit-btn" onclick="goReady(true)" disabled>▦ 16-BIT MODE</button>
+    </div>
   </div>
 
   <!-- READY: get ready hint, telescope hovering at play position -->
@@ -292,6 +313,7 @@ window.addEventListener('message', e => {
   if (!e.data || e.data.type !== 'streamlit:render') return;
   if (!_stReady) {
     document.getElementById('launch-btn').disabled = false;
+    document.getElementById('launch-16bit-btn').disabled = false;
     _stReady = true;
     updateHeight();
   }
@@ -331,6 +353,9 @@ const CRAFT_X       = 96;
 const CRAFT_R       = 10;
 const TUNNEL_LENGTH = 3200;  // px — total structure length (exit corridor ~700px)
 const TUNNEL_GAP    = 110;   // vertical opening height
+// Focal-plane array hazard model — bounding box (wider than tall, like the real
+// Roman WFI detector mosaic). Collision uses a box inset from this (see updateGame).
+const FP_W = 60, FP_H = 38;
 
 // ═══════════════════════════════════════════════════════════════
 //  State machine
@@ -348,6 +373,7 @@ let bobT  = 0;
 
 // Game-specific state
 let craftY, craftV;
+let gravSign = 1;            // 1 = normal gravity, -1 = inverted (3rd ship structure)
 let obstacles = [];
 let score, bestScore = 0;
 let GAME_ID = null, submitted = false;
@@ -363,7 +389,9 @@ let waveCount = 4;
 let tunnelPending       = false;
 let tunnelSplit         = false; // true on every 2nd tunnel (80, 160, … pts)
 let tunnelBounce        = false; // true on alternating tunnels → Rocky bounces in Room 1
+let tunnelStructIndex   = 0;     // structure number (th) of the pending tunnel
 let lastTunnelThreshold = 0;
+let bounceChamberSeen   = 0;     // # of bounce chambers spawned so far → array count doubles each time (4, 8, 16, …)
 
 function rand(a, b) { return a + Math.random() * (b - a); }
 
@@ -399,8 +427,9 @@ function initScene() { stars = buildStars(); }
 let shootingStar = null;   // active streak object, or null when none
 let nextShootAt  = 0;      // earliest timestamp (ms) the next one may appear
 
-// Pick a fresh random delay before the next streak is allowed (per game)
-function scheduleShootingStar() { nextShootAt = Date.now() + rand(15000, 45000); }
+// Pick a fresh random delay before the next streak is allowed (per game).
+// Delay is 5× the original window, making the streak 5× rarer.
+function scheduleShootingStar() { nextShootAt = Date.now() + rand(75000, 225000); }
 
 function spawnShootingStar() {
   const fromLeft = Math.random() < 0.5;
@@ -459,22 +488,39 @@ function drawShootingStar() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  Debris factory — five distinct types freely placed in the field
+//  Debris factory — six weighted types freely placed in the field
 // ═══════════════════════════════════════════════════════════════
-const DEBRIS_TYPES  = ['asteroid','asteroid','asteroid','ufo','tank','panel','astronaut','comet'];
-const AST_COLORS    = ['#5a5562','#6b5a50','#4a4850','#7a6870','#6a6460'];
+// Spawn weights — asteroids dominate the field; UFOs are as rare as the
+// (very rare) shooting star. Boosters/panels are the common man-made debris.
+const DEBRIS_WEIGHTS = [
+  ['asteroid', 62],
+  ['booster',  14],
+  ['panel',    13],
+  ['astronaut', 6],
+  ['comet',     4],
+  ['ufo',       1],
+];
+const DEBRIS_WEIGHT_TOTAL = DEBRIS_WEIGHTS.reduce((s, e) => s + e[1], 0);
+const AST_COLORS = ['#5a5562','#6b5a50','#4a4850','#7a6870','#6a6460'];
+
+function pickDebrisType() {
+  let r = Math.random() * DEBRIS_WEIGHT_TOTAL;
+  for (const [t, w] of DEBRIS_WEIGHTS) if ((r -= w) < 0) return t;
+  return 'asteroid';
+}
 
 function makeDebris(x, y) {
-  const type = DEBRIS_TYPES[Math.floor(Math.random() * DEBRIS_TYPES.length)];
+  const type = pickDebrisType();
   const seed = Math.random() * 9999;
   let w, h, color;
   switch (type) {
-    case 'asteroid':  w = rand(60,102); h = rand(53,91);  color = AST_COLORS[Math.floor(Math.random()*AST_COLORS.length)]; break;
+    // Asteroids span a wide size range — tiny pebbles to huge boulders.
+    case 'asteroid':  w = rand(26,128); h = w * rand(0.72,0.96); color = AST_COLORS[Math.floor(Math.random()*AST_COLORS.length)]; break;
     case 'ufo':       w = rand(98,130); h = 53;  color = '#909aa8'; break;
-    case 'tank':      w = 46; h = rand(114,149); color = Math.random() < 0.5 ? '#e0e4ea' : '#e86020'; break;
+    case 'booster':   w = rand(30,40);  h = rand(122,166); color = '#e8ebf0'; break;
     case 'panel':     w = rand(112,147); h = 32;  color = '#1a2a8a'; break;
-    case 'astronaut': w = 44; h = rand(64, 76);  color = '#d8dce6'; break;
-    case 'comet':     w = rand(44, 56); h = w;   color = '#88aacc'; break;
+    case 'astronaut': w = 46; h = rand(56, 66);  color = '#eef1f6'; break;
+    case 'comet':     w = rand(40, 58); h = w;   color = '#88aacc'; break;
   }
   return {
     kind: 'debris',
@@ -519,7 +565,7 @@ function spawnWave(baseX) {
   else spawnGroup(baseX);
 }
 
-function spawnTunnel(baseX, isSplit = false, bounceRocky = false) {
+function spawnTunnel(baseX, isSplit = false, bounceRocky = false, structIndex = 0) {
   const ROOM_H = 380;
   const COR_H  = TUNNEL_GAP;
   const midCY  = (H - GROUND_H) / 2;
@@ -529,7 +575,7 @@ function spawnTunnel(baseX, isSplit = false, bounceRocky = false) {
   const cy1 = Math.max(minCY, Math.min(maxCY, midCY + rand(-90, 90)));
 
   // Same-x pairs create instant (sharp) vertical walls between zones.
-  // Zones: entry corridor (300px) → Room 1 (700px) → Corridor 1 (600px) → Room 2 (900px) → exit (1820px)
+  // Zones: entry corridor (300px) → Room 1 (700px) → Corridor 1 (600px) → Room 2 (1120px) → exit (1600px)
   const keyframes = [
     { x:    0, cy: midCY, gapH: COR_H  }, // entrance
     { x:  300, cy: midCY, gapH: COR_H  }, // entry corridor end  ─┐ sharp wall
@@ -538,71 +584,137 @@ function spawnTunnel(baseX, isSplit = false, bounceRocky = false) {
     { x: 1000, cy: cy1,   gapH: COR_H  }, // corridor 1 (random) ─┘
     { x: 1600, cy: cy1,   gapH: COR_H  }, // corridor 1 end      ─┐ sharp wall
     { x: 1600, cy: midCY, gapH: ROOM_H }, // room 2 opens        ─┘
-    { x: 2500, cy: midCY, gapH: ROOM_H }, // room 2 end          ─┐ sharp wall
-    { x: 2500, cy: midCY, gapH: COR_H  }, // exit corridor       ─┘
+    { x: 2720, cy: midCY, gapH: ROOM_H }, // room 2 end          ─┐ sharp wall
+    { x: 2720, cy: midCY, gapH: COR_H  }, // exit corridor       ─┘
     { x: TUNNEL_LENGTH, cy: midCY, gapH: COR_H }, // exit
   ];
 
   // x-offsets where zone walls sit — used to render internal doorway faces
-  const wallXoffs = [300, 1000, 1600, 2500];
+  const wallXoffs = [300, 1000, 1600, 2720];
 
   // Split path: every other tunnel gets two exit corridors — one open, one dead-end.
-  // Geometry: Room 2 spans xOff 1600–2500. The divider drops at xOff 2100,
-  // splitting into an upper channel (y 62–192) and lower channel (y 312–442).
-  // The sealed corridor ends at a wall face at xOff 2450; the open one passes through.
+  // Geometry: Room 2 spans xOff 1600–2720. The divider drops at xOff 2100,
+  // splitting into an upper channel (y 62–168) and lower channel (y 336–442).
+  // The dead-end corridor ends at a wall face at xOff 2650, BUT the divider has a
+  // wide diagonal connector tunnel carved through it: a player who picked the
+  // dead-end channel can navigate up/down through this slanted passage and escape
+  // into the open channel before reaching the sealed wall. The band is tall and the
+  // connector long & gradual so the telescope clears the diagonal walls comfortably.
   let split = null;
   if (isSplit) {
+    const yT = 168, yB = 336;          // band (divider) top / bottom edges (taller band)
+    const xL = 2100, xR = 2650;        // band left edge / dead-end wall face (pushed back)
+    const CW = 160, run = 260;         // connector width (x) and diagonal run (x)
+    const dx1 = 2200, dx2 = dx1 + CW;  // connector opening on the DEAD-channel side
+    const ox1 = dx1 + run, ox2 = ox1 + CW; // connector opening on the OPEN-channel side
+    const openUpper = Math.random() < 0.5;
+
+    // Two solid divider pieces (polygons in xOff space) leaving a diagonal gap.
+    // openUpper: open channel is on top → connector rises left→right (dead side at
+    //            the band bottom, open side at the band top).
+    // !openUpper: mirrored vertically → connector descends.
+    let leftPoly, rightPoly, corridor;
+    if (openUpper) {
+      leftPoly  = [[xL, yT], [ox1, yT], [dx1, yB], [xL, yB]];
+      rightPoly = [[ox2, yT], [xR, yT], [xR, yB], [dx2, yB]];
+      corridor  = [[ox1, yT], [ox2, yT], [dx2, yB], [dx1, yB]];
+    } else {
+      leftPoly  = [[xL, yB], [ox1, yB], [dx1, yT], [xL, yT]];
+      rightPoly = [[ox2, yB], [xR, yB], [xR, yT], [dx2, yT]];
+      corridor  = [[ox1, yB], [ox2, yB], [dx2, yT], [dx1, yT]];
+    }
+
     split = {
-      xStart:    2100,  // where the dividing wall begins (inside Room 2)
-      divY_top:   192,  // top of dividing wall
-      divY_bot:   312,  // bottom of dividing wall
-      deadEndX:  2450,  // x-offset of sealed corridor wall face (and end of divider)
-      openUpper: Math.random() < 0.5,  // randomly assign which channel is safe
+      xStart:   xL,        // where the dividing wall begins (inside Room 2)
+      divY_top: yT,        // top of dividing band
+      divY_bot: yB,        // bottom of dividing band
+      deadEndX: xR,        // x-offset of sealed corridor wall face
+      openUpper,           // which channel is the safe one
+      dividerPolys: [leftPoly, rightPoly],
+      corridor,            // the diagonal escape passage (for rendering)
     };
+
     // Align the exit corridor with the open sub-channel so the player doesn't
-    // slam into a wall at xOff 2500 when the room narrows back to COR_H.
-    const exitCY = split.openUpper
-      ? (62 + split.divY_top) / 2   // upper channel centre ≈ 127
-      : (split.divY_bot + 442) / 2; // lower channel centre ≈ 377
-    keyframes[8] = { x: 2500,          cy: exitCY, gapH: COR_H };
+    // slam into a wall at xOff 2720 when the room narrows back to COR_H.
+    const exitCY = openUpper
+      ? (62 + yT) / 2   // upper channel centre ≈ 115
+      : (yB + 442) / 2; // lower channel centre ≈ 389
+    keyframes[8] = { x: 2720,          cy: exitCY, gapH: COR_H };
     keyframes[9] = { x: TUNNEL_LENGTH, cy: exitCY, gapH: COR_H };
   }
 
-  // Floating obstacles inside Room 2 (xOff 1600–2500); all kept left of xOff 2050 to clear exit tunnels
-  const r2s = 1600;
+  // Floating obstacles spread evenly across Room 2. They sit in three equal
+  // sub-bands (each jittered) so they're distributed through the chamber rather
+  // than bunched at the entry side. On split tunnels they stay left of the
+  // divider (xOff 2100); on normal tunnels they use the full room (ends 2720).
+  const r2s   = 1600;
+  const oMin  = r2s + 70;
+  const oMax  = isSplit ? 2040 : 2620;
+  const oBand = (oMax - oMin) / 3;
   // spin: slow clockwise angular velocity (rad/frame, positive = clockwise on a y-down canvas)
-  const internalObjects = [
-    { type: 'robot', xOff: rand(r2s + 40,  r2s + 160), y: midCY + rand(-100, 100), r: 30, angle: Math.random() * Math.PI * 2, spin: rand(0.006, 0.012) },
-    { type: 'tv',    xOff: rand(r2s + 180, r2s + 320), y: midCY + rand(-100, 100), r: 38, angle: Math.random() * Math.PI * 2, spin: rand(0.006, 0.012) },
-    { type: 'robot', xOff: rand(r2s + 340, r2s + 490), y: midCY + rand(-100, 100), r: 30, angle: Math.random() * Math.PI * 2, spin: rand(0.006, 0.012) },
-  ];
+  // The 4th structure is a laser gauntlet — its chambers hold no floating debris.
+  const laserChamber = structIndex === 4;
+  const objTypes = ['robot', 'tv', 'robot'];
+  const internalObjects = laserChamber ? [] : objTypes.map((type, i) => ({
+    type,
+    xOff:  oMin + oBand * i + rand(oBand * 0.18, oBand * 0.82),
+    y:     midCY + rand(-100, 100),
+    r:     type === 'tv' ? 38 : 30,
+    angle: Math.random() * Math.PI * 2,
+    spin:  rand(0.006, 0.012),
+  }));
 
-  // Room 1 furniture (xOff 300–1000): desk group is static. Rocky stands on the
-  // floor in most structures, but in alternating ones (bounceRocky) he drifts and
-  // bounces around the chamber walls — see updateGame / drawTunnel.
+  // 4th structure: two rotating laser turrets mounted near the middle of each
+  // chamber's back wall (Room 1 + Room 2) — red sweeping beams, lethal on contact.
+  let lasers = null;
+  if (laserChamber) {
+    const dir = () => (Math.random() < 0.5 ? -1 : 1);
+    const mk  = (xOff) => ({ xOff, y: midCY, angle: Math.random() * Math.PI * 2,
+                             spin: dir() * rand(0.009, 0.014), len: 138 });
+    lasers = [ mk(520),  mk(780),      // Room 1 (centre xOff 650)
+               mk(2030), mk(2290) ];   // Room 2 (centre xOff 2160)
+  }
+
+  // Room 1 furniture (xOff 300–1000): a static desk holds the focal-plane array
+  // (in non-bouncing structures), while in alternating ones (bounceRocky) four
+  // arrays drift and bounce around the chamber — see updateGame / drawTunnel.
+  // A framed Nancy portrait hangs on the back wall in a zone clear of the window
+  // (which spans xOff 500–800).
   const deskLeft = Math.random() < 0.5;
   const leftX  = rand(410, 590);
   const rightX = rand(710, 930);
-  const rockyStartX = deskLeft ? rightX : leftX;  // opposite the desk
   const room1 = {
     deskXOff: deskLeft ? leftX : rightX,
     rockyBounces: bounceRocky,
-    rockyXOff: rockyStartX,                        // used for the static (floor) variant
+    portraitXOff: Math.random() < 0.5 ? rand(355, 450) : rand(850, 945),
+    // 1st structure only: a bed rests on the floor OPPOSITE the desk (so it never
+    // overlaps the desk/chair); being on the floor keeps it clear of the wall
+    // portrait and the ceiling window too.
+    bedXOff: structIndex === 1 ? (deskLeft ? rand(795, 835) : rand(455, 495)) : null,
   };
   if (bounceRocky) {
-    // Bounce bounds: chamber interior inset so the 46px sprite never clips a wall.
-    const ROCKY_SIZE = 46, rHalf = ROCKY_SIZE / 2, rPad = 16;
+    // Bounce bounds: chamber interior inset so the array never clips a wall.
+    const halfW = FP_W / 2, halfH = FP_H / 2, rPad = 14;
     const roomTopY = midCY - ROOM_H / 2, roomBotY = midCY + ROOM_H / 2;
-    room1.rMinX = 300  + rHalf + rPad;
-    room1.rMaxX = 1000 - rHalf - rPad;
-    room1.rMinY = roomTopY + rHalf + rPad;
-    room1.rMaxY = roomBotY - rHalf - rPad;
-    room1.rocky = {
-      x:  rockyStartX,                             // start where he'd otherwise stand
-      y:  rand(room1.rMinY, room1.rMaxY),
-      vx: (Math.random() < 0.5 ? -1 : 1) * rand(0.35, 0.55),
-      vy: (Math.random() < 0.5 ? -1 : 1) * rand(0.35, 0.55),
-    };
+    room1.rMinX = 300  + halfW + rPad;
+    room1.rMaxX = 1000 - halfW - rPad;
+    room1.rMinY = roomTopY + halfH + rPad;
+    room1.rMaxY = roomBotY - halfH - rPad;
+    // Solid focal-plane arrays drift and bounce around the chamber. The count
+    // doubles every time a bounce chamber is encountered: 4, then 8, 16, … —
+    // the player must dodge every one (a single hit ends the round). Capped to
+    // keep the swarm renderable.
+    const rockyCount = Math.min(256, 4 * Math.pow(2, bounceChamberSeen));
+    bounceChamberSeen++;
+    room1.rockies = [];
+    for (let i = 0; i < rockyCount; i++) {
+      room1.rockies.push({
+        x:  rand(room1.rMinX, room1.rMaxX),
+        y:  rand(room1.rMinY, room1.rMaxY),
+        vx: (Math.random() < 0.5 ? -1 : 1) * rand(0.35, 0.55),
+        vy: (Math.random() < 0.5 ? -1 : 1) * rand(0.35, 0.55),
+      });
+    }
   }
 
   obstacles.push({
@@ -613,8 +725,12 @@ function spawnTunnel(baseX, isSplit = false, bounceRocky = false) {
     keyframes,
     wallXoffs,
     internalObjects,
+    lasers,
     room1,
     split,
+    structIndex,
+    gravityInverter: structIndex === 3,   // 3rd structure flips gravity
+    laserChamber,                          // 4th structure → rotating laser hazards
     scored: true,
   });
 }
@@ -627,6 +743,40 @@ function circleRect(cx, cy, cr, rx, ry, rw, rh) {
   return dx*dx + dy*dy < cr*cr;
 }
 
+// Squared distance from point (px,py) to segment (ax,ay)-(bx,by)
+function distToSeg2(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay;
+  const len2 = dx*dx + dy*dy || 1;
+  let t = ((px - ax) * dx + (py - ay) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  const qx = ax + t*dx, qy = ay + t*dy;
+  const ex = px - qx, ey = py - qy;
+  return ex*ex + ey*ey;
+}
+
+// Circle-vs-polygon collision. poly is an array of [x,y] vertices in xOff space;
+// xShift translates them into world coordinates (the tunnel's left edge).
+function circlePoly(cx, cy, cr, poly, xShift) {
+  xShift = xShift || 0;
+  // 1) centre inside polygon? (ray-cast)
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i][0] + xShift, yi = poly[i][1];
+    const xj = poly[j][0] + xShift, yj = poly[j][1];
+    if (((yi > cy) !== (yj > cy)) &&
+        (cx < (xj - xi) * (cy - yi) / (yj - yi) + xi)) inside = !inside;
+  }
+  if (inside) return true;
+  // 2) any edge within cr of the centre?
+  const cr2 = cr * cr;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i][0] + xShift, yi = poly[i][1];
+    const xj = poly[j][0] + xShift, yj = poly[j][1];
+    if (distToSeg2(cx, cy, xi, yi, xj, yj) < cr2) return true;
+  }
+  return false;
+}
+
 // ═══════════════════════════════════════════════════════════════
 //  Screen transitions
 // ═══════════════════════════════════════════════════════════════
@@ -636,17 +786,21 @@ function showOverlay(id) {
   updateHeight();
 }
 
-function goReady() {
+function goReady(pixel) {
+  // LAUNCH passes false, 16-BIT MODE passes true; "Play Again" passes nothing,
+  // so it preserves whichever mode the player last chose.
+  if (pixel !== undefined) pixelMode = pixel;
   craftY = H / 2; craftV = 0;
   state  = STATE.READY;
   showOverlay('ready-overlay');
 }
 
 function beginPlay() {
-  state = STATE.PLAYING; craftV = FLAP;
+  state = STATE.PLAYING; craftV = FLAP; gravSign = 1;
   score = 0; submitted = false; obstacles = [];
   waveType = WAVE.FLOAT; waveCount = 4; // first 4 waves guaranteed float
-  tunnelPending = false; tunnelSplit = false; tunnelBounce = false; lastTunnelThreshold = 0;
+  tunnelPending = false; tunnelSplit = false; tunnelBounce = false;
+  tunnelStructIndex = 0; lastTunnelThreshold = 0; bounceChamberSeen = 0;
   shootingStar = null; scheduleShootingStar();
   let sx = W + 140;
   for (let g = 0; g < 4; g++) { spawnWave(sx); sx += SPACING; }
@@ -688,6 +842,46 @@ function stepSim() {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  16-bit post-process filter — pixelation + colour quantisation
+//  Each frame is rendered normally, then downscaled to a low internal
+//  resolution, quantised to a small palette, and scaled back up with
+//  nearest-neighbour sampling. This single cheap pass turns EVERY visual
+//  16-bit at once — no per-asset re-rendering needed.
+// ═══════════════════════════════════════════════════════════════
+let pixelMode = false;
+const PIX_W = 160, PIX_H = 224;          // 16-bit internal resolution (matches the 400×560 ratio)
+const _pcanvas = document.createElement('canvas');
+_pcanvas.width = PIX_W; _pcanvas.height = PIX_H;
+const _pctx = _pcanvas.getContext('2d', { willReadFrequently: true });
+
+// Per-channel posterisation LUT → chunky retro colour steps.
+const _Q_LEVELS = 6;
+const _qLUT = new Uint8Array(256);
+for (let i = 0; i < 256; i++) {
+  _qLUT[i] = Math.round(Math.round(i / 255 * (_Q_LEVELS - 1)) / (_Q_LEVELS - 1) * 255);
+}
+
+function applyPixelFilter() {
+  // 1) Downsample the full frame (smoothing on → averaged blocks)
+  _pctx.imageSmoothingEnabled = true;
+  _pctx.clearRect(0, 0, PIX_W, PIX_H);
+  _pctx.drawImage(canvas, 0, 0, W, H, 0, 0, PIX_W, PIX_H);
+  // 2) Quantise colours to the retro palette
+  const img = _pctx.getImageData(0, 0, PIX_W, PIX_H);
+  const px = img.data;
+  for (let i = 0; i < px.length; i += 4) {
+    px[i]     = _qLUT[px[i]];
+    px[i + 1] = _qLUT[px[i + 1]];
+    px[i + 2] = _qLUT[px[i + 2]];
+  }
+  _pctx.putImageData(img, 0, 0);
+  // 3) Scale back up with nearest-neighbour → chunky 16-bit pixels
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(_pcanvas, 0, 0, PIX_W, PIX_H, 0, 0, W, H);
+  ctx.imageSmoothingEnabled = true;
+}
+
 function render() {
   if (state === STATE.ATTRACT || state === STATE.READY) {
     const bobX = state === STATE.ATTRACT ? W / 2 : CRAFT_X;
@@ -695,6 +889,7 @@ function render() {
   } else {
     renderGame();  // playing, or frozen frame under end overlay
   }
+  if (pixelMode) applyPixelFilter();   // 16-bit mode: post-process the whole frame
 }
 
 function loop(now) {
@@ -715,15 +910,28 @@ function loop(now) {
 //  Physics
 // ═══════════════════════════════════════════════════════════════
 function updateGame() {
-  craftV = Math.min(craftV + GRAVITY * simFactor, MAX_FALL);
+  // Gravity inverter (3rd structure): gravity flips once the craft passes the
+  // Room-1 interface (xOff 300) and stays flipped until it exits the structure
+  // (past its end). Recomputed each frame so it self-clears on exit.
+  gravSign = 1;
+  for (const d of obstacles) {
+    if (d.kind === 'tunnel' && d.gravityInverter) {
+      const xOff = CRAFT_X - d.x;
+      if (xOff >= 300 && xOff <= d.length) gravSign = -1;
+    }
+  }
+  craftV += GRAVITY * gravSign * simFactor;
+  craftV = gravSign > 0 ? Math.min(craftV, MAX_FALL) : Math.max(craftV, -MAX_FALL);
   craftY += craftV * simFactor;
 
   // Queue a tunnel every 40 points; even-numbered triggers (80, 160 …) get split paths
-  const th = Math.floor(score / 25);
+  const th = Math.floor(score / 3);
   if (score > 0 && th > lastTunnelThreshold) {
     tunnelPending = true;
     tunnelSplit = (th % 2 === 0);
     tunnelBounce = (th % 2 === 0);  // structure #1 floor, #2 bounces, #3 floor, …
+    if (th === 4) { tunnelSplit = false; tunnelBounce = false; }  // 4th = clean laser gauntlet
+    tunnelStructIndex = th;         // structure number → tags the gravity-inverter (3rd) / lasers (4th)
     lastTunnelThreshold = th;
   }
 
@@ -732,14 +940,17 @@ function updateGame() {
     // Slowly rotate the robots/TV floating inside each tunnel (clockwise)
     if (d.kind === 'tunnel') {
       for (const obj of d.internalObjects) obj.angle += obj.spin * simFactor;
-      // In bouncing structures, drift Rocky around Room 1, reflecting off the walls.
+      if (d.lasers) for (const lz of d.lasers) lz.angle += lz.spin * simFactor;
+      // In bouncing structures, drift the Rockys around Room 1, reflecting off the walls.
       if (d.room1.rockyBounces) {
-        const r1 = d.room1, rk = r1.rocky;
-        rk.x += rk.vx * simFactor; rk.y += rk.vy * simFactor;
-        if      (rk.x < r1.rMinX) { rk.x = r1.rMinX; rk.vx =  Math.abs(rk.vx); }
-        else if (rk.x > r1.rMaxX) { rk.x = r1.rMaxX; rk.vx = -Math.abs(rk.vx); }
-        if      (rk.y < r1.rMinY) { rk.y = r1.rMinY; rk.vy =  Math.abs(rk.vy); }
-        else if (rk.y > r1.rMaxY) { rk.y = r1.rMaxY; rk.vy = -Math.abs(rk.vy); }
+        const r1 = d.room1;
+        for (const rk of r1.rockies) {
+          rk.x += rk.vx * simFactor; rk.y += rk.vy * simFactor;
+          if      (rk.x < r1.rMinX) { rk.x = r1.rMinX; rk.vx =  Math.abs(rk.vx); }
+          else if (rk.x > r1.rMaxX) { rk.x = r1.rMaxX; rk.vx = -Math.abs(rk.vx); }
+          if      (rk.y < r1.rMinY) { rk.y = r1.rMinY; rk.vy =  Math.abs(rk.vy); }
+          else if (rk.y > r1.rMaxY) { rk.y = r1.rMaxY; rk.vy = -Math.abs(rk.vy); }
+        }
       }
     }
     // Tunnel earns no points (scored:true from birth); debris/columns score normally
@@ -757,7 +968,7 @@ function updateGame() {
     : W;
   if (maxX < W + SPACING) {
     if (tunnelPending) {
-      spawnTunnel(maxX + SPACING, tunnelSplit, tunnelBounce);
+      spawnTunnel(maxX + SPACING, tunnelSplit, tunnelBounce, tunnelStructIndex);
       tunnelPending = false; tunnelSplit = false; tunnelBounce = false;
     } else {
       spawnWave(maxX + rand(SPACING * 0.9, SPACING * 1.2));
@@ -779,15 +990,36 @@ function updateGame() {
             endGame(); return;
           }
         }
+        // Rotating laser beams (4th structure) — a beam touching the craft is fatal.
+        if (d.lasers) {
+          const LR = CRAFT_R + 2;                  // beam half-thickness margin
+          for (const lz of d.lasers) {
+            const mx = d.x + lz.xOff, my = lz.y;
+            const tx = mx + Math.cos(lz.angle) * lz.len;
+            const ty = my + Math.sin(lz.angle) * lz.len;
+            if (distToSeg2(CRAFT_X, craftY, mx, my, tx, ty) < LR * LR) { endGame(); return; }
+          }
+        }
+        // Bouncing focal-plane arrays are solid — hitting one ends the round.
+        // Box collision (inset from the model) matches the wide detector shape.
+        if (d.room1.rockyBounces) {
+          const hbW = FP_W * 0.42, hbH = FP_H * 0.42;
+          for (const rk of d.room1.rockies) {
+            if (circleRect(CRAFT_X, craftY, CRAFT_R, (d.x + rk.x) - hbW, rk.y - hbH, hbW * 2, hbH * 2)) {
+              endGame(); return;
+            }
+          }
+        }
         if (d.split) {
           const spl = d.split;
           const xOff = CRAFT_X - d.x;
           if (xOff >= spl.xStart) {
-            // Dividing wall between the two corridors
-            if (craftY + CRAFT_R > spl.divY_top && craftY - CRAFT_R < spl.divY_bot) {
-              endGame(); return;
+            // Solid divider pieces — the diagonal connector between them is the
+            // escape route, so collision is tested against the two polygons.
+            for (const poly of spl.dividerPolys) {
+              if (circlePoly(CRAFT_X, craftY, CRAFT_R, poly, d.x)) { endGame(); return; }
             }
-            // Dead-end wall in the sealed corridor
+            // Dead-end wall: kills a craft that never crossed to the open channel.
             if (CRAFT_X + CRAFT_R >= d.x + spl.deadEndX) {
               const inUpper = craftY < (spl.divY_top + spl.divY_bot) / 2;
               if (spl.openUpper ? !inUpper : inUpper) { endGame(); return; }
@@ -847,7 +1079,7 @@ function drawDebris(d) {
   switch (d.type) {
     case 'asteroid':  drawAsteroid(d);  break;
     case 'ufo':       drawUFO(d);       break;
-    case 'tank':      drawTank(d);      break;
+    case 'booster':   drawBooster(d);   break;
     case 'panel':     drawPanel(d);     break;
     case 'astronaut': drawAstronaut(d); break;
     case 'comet':     drawComet(d);     break;
@@ -904,61 +1136,104 @@ function drawUFO(d) {
   ctx.restore();
 }
 
-function drawTank(d) {
+// Falcon-9-style first-stage booster: slender white cylinder, sooty lower body,
+// grid fins near the top, deployed landing legs, and a bright retropropulsion plume.
+function drawBooster(d) {
   ctx.save(); ctx.translate(d.x, d.y); ctx.rotate(d.angle);
-  const hw = d.w / 2, hh = d.h / 2;
-  const isOrange = d.color === '#e86020';
+  const w = d.w, h = d.h, hw = w / 2, hh = h / 2;
+  const topY = -hh, botY = hh;
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
 
-  // Cylinder body — top 74% of height
-  const bodyBot = hh * 0.48;
-  ctx.fillStyle = d.color;
-  ctx.beginPath(); ctx.roundRect(-hw, -hh, d.w, hh + bodyBot, hw); ctx.fill();
-  ctx.strokeStyle = isOrange ? 'rgba(0,0,0,0.28)' : 'rgba(0,0,0,0.15)';
-  ctx.lineWidth = 1; ctx.stroke();
-
-  // Insulation bands / markings
-  if (isOrange) {
-    ctx.fillStyle = 'rgba(0,0,0,0.25)';
-    [-0.38, 0, 0.38].forEach(t =>
-      ctx.fillRect(-hw + 1.5, t * hh - 2.5, d.w - 3, 5)
-    );
-  } else {
-    ctx.fillStyle = '#0b3d91';
-    ctx.fillRect(-hw + 2, -hh * 0.52, d.w - 4, 5);
-    ctx.fillStyle = 'rgba(0,0,0,0.10)';
-    ctx.fillRect(-hw + 4, hh * 0.08, d.w - 8, hh * 0.26);
-  }
-
-  // Engine skirt — tapered collar below the tank body
-  const skirtBot = hh * 0.70;
-  ctx.fillStyle = isOrange ? '#7a2e0e' : '#585e66';
+  // ── Retropropulsion plume (drawn first; the base overlaps its root) ──
+  const plumeLen = h * (0.42 + Math.random() * 0.12);
+  const pg = ctx.createLinearGradient(0, botY, 0, botY + plumeLen);
+  pg.addColorStop(0,    'rgba(255,245,200,0.95)');
+  pg.addColorStop(0.35, 'rgba(255,168,46,0.85)');
+  pg.addColorStop(1,    'rgba(255,80,20,0)');
+  ctx.fillStyle = pg;
   ctx.beginPath();
-  ctx.moveTo(-hw,        bodyBot);
-  ctx.lineTo( hw,        bodyBot);
-  ctx.lineTo( hw * 1.18, skirtBot);
-  ctx.lineTo(-hw * 1.18, skirtBot);
+  ctx.moveTo(-w * 0.34, botY - 2);
+  ctx.quadraticCurveTo(-w * 0.12, botY + plumeLen * 0.55, 0, botY + plumeLen);
+  ctx.quadraticCurveTo( w * 0.12, botY + plumeLen * 0.55, w * 0.34, botY - 2);
   ctx.closePath(); ctx.fill();
-  ctx.strokeStyle = 'rgba(0,0,0,0.30)'; ctx.lineWidth = 0.8; ctx.stroke();
+  const ig = ctx.createLinearGradient(0, botY, 0, botY + plumeLen * 0.6);
+  ig.addColorStop(0, 'rgba(255,255,245,0.95)');
+  ig.addColorStop(1, 'rgba(255,210,120,0)');
+  ctx.fillStyle = ig;
+  ctx.beginPath();
+  ctx.moveTo(-w * 0.16, botY - 2);
+  ctx.quadraticCurveTo(0, botY + plumeLen * 0.5, 0, botY + plumeLen * 0.64);
+  ctx.quadraticCurveTo(0, botY + plumeLen * 0.5, w * 0.16, botY - 2);
+  ctx.closePath(); ctx.fill();
 
-  // Two engine nozzle bells
-  const bellTopHW = hw * 0.42;
-  const bellBotHW = hw * 0.58;
-  const bellH = hh - skirtBot;
-  ctx.fillStyle = '#484e56';
-  for (const cx of [-hw * 0.42, hw * 0.42]) {
-    ctx.beginPath();
-    ctx.moveTo(cx - bellTopHW, skirtBot);
-    ctx.lineTo(cx + bellTopHW, skirtBot);
-    ctx.lineTo(cx + bellBotHW, hh);
-    ctx.lineTo(cx - bellBotHW, hh);
-    ctx.closePath(); ctx.fill();
-    ctx.strokeStyle = '#282e34'; ctx.lineWidth = 0.8; ctx.stroke();
-    // Throat opening
-    ctx.fillStyle = '#181c22';
-    ctx.beginPath();
-    ctx.arc(cx, skirtBot + bellH * 0.28, bellTopHW * 0.58, 0, Math.PI * 2);
-    ctx.fill();
+  // ── Landing legs (deployed, splayed; behind the body) ──
+  function leg(side) {
+    const ax = side * hw * 0.6, ay = botY - h * 0.16;   // attach point on lower body
+    const fx = side * hw * 1.9, fy = botY + 1;           // splayed-out foot
+    ctx.strokeStyle = '#202028'; ctx.lineWidth = Math.max(2.5, w * 0.09);
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(fx, fy); ctx.stroke();
+    ctx.lineWidth = Math.max(1.4, w * 0.05);             // A-frame brace
+    ctx.beginPath(); ctx.moveTo(side * hw * 0.5, botY - h * 0.05); ctx.lineTo(fx, fy); ctx.stroke();
+    ctx.fillStyle = '#15151b';                           // foot pad
+    ctx.beginPath(); ctx.ellipse(fx, fy, w * 0.12, w * 0.06, 0, 0, Math.PI * 2); ctx.fill();
   }
+  leg(-1); leg(1);
+
+  // ── Body cylinder with cylindrical (left-dark→centre-light) shading ──
+  const r  = Math.min(5, hw * 0.5);
+  const bg = ctx.createLinearGradient(-hw, 0, hw, 0);
+  bg.addColorStop(0,    '#9298a6');
+  bg.addColorStop(0.45, '#f1f3f8');
+  bg.addColorStop(0.62, '#eceff5');
+  bg.addColorStop(1,    '#a6acba');
+  ctx.fillStyle = bg;
+  ctx.beginPath(); ctx.roundRect(-hw, topY, w, h, r); ctx.fill();
+
+  // Interior detailing, clipped to the body
+  ctx.save();
+  ctx.beginPath(); ctx.roundRect(-hw, topY, w, h, r); ctx.clip();
+  // Sooty scorched lower section
+  const soot = ctx.createLinearGradient(0, topY + h * 0.42, 0, botY);
+  soot.addColorStop(0,    'rgba(28,28,33,0)');
+  soot.addColorStop(0.55, 'rgba(24,24,29,0.62)');
+  soot.addColorStop(1,    'rgba(10,10,13,0.95)');
+  ctx.fillStyle = soot;
+  ctx.fillRect(-hw, topY + h * 0.42, w, h * 0.58);
+  // Black interstage band near the top
+  ctx.fillStyle = '#181820';
+  ctx.fillRect(-hw, topY + h * 0.085, w, h * 0.05);
+  // Raceway line + a small data/serial marking
+  ctx.strokeStyle = 'rgba(70,74,84,0.6)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(hw * 0.25, topY + h * 0.14); ctx.lineTo(hw * 0.25, botY); ctx.stroke();
+  ctx.fillStyle = 'rgba(44,48,60,0.5)';
+  ctx.fillRect(-hw * 0.2, topY + h * 0.19, w * 0.06, h * 0.14);
+  ctx.restore();
+
+  // Body outline
+  ctx.strokeStyle = '#383c46'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.roundRect(-hw, topY, w, h, r); ctx.stroke();
+
+  // ── Engine nozzle skirt at the base ──
+  ctx.fillStyle = '#2a2a32';
+  ctx.beginPath();
+  ctx.moveTo(-hw * 0.72, botY - h * 0.02);
+  ctx.lineTo( hw * 0.72, botY - h * 0.02);
+  ctx.lineTo( hw * 0.5,  botY + h * 0.03);
+  ctx.lineTo(-hw * 0.5,  botY + h * 0.03);
+  ctx.closePath(); ctx.fill();
+
+  // ── Grid fins near the top (project out beyond the body) ──
+  function gridFin(side) {
+    const fy = topY + h * 0.155, fht = h * 0.085, fwd = w * 0.5;
+    const x0 = side > 0 ? hw : -hw - fwd;
+    ctx.fillStyle = '#565a64';
+    ctx.fillRect(x0, fy, fwd, fht);
+    ctx.strokeStyle = '#202026'; ctx.lineWidth = 0.8; ctx.strokeRect(x0, fy, fwd, fht);
+    ctx.strokeStyle = 'rgba(22,22,28,0.7)'; ctx.lineWidth = 0.6;  // lattice
+    for (let i = 1; i < 3; i++) { const lx = x0 + fwd * i / 3; ctx.beginPath(); ctx.moveTo(lx, fy); ctx.lineTo(lx, fy + fht); ctx.stroke(); }
+    const ly = fy + fht / 2; ctx.beginPath(); ctx.moveTo(x0, ly); ctx.lineTo(x0 + fwd, ly); ctx.stroke();
+  }
+  gridFin(-1); gridFin(1);
 
   ctx.restore();
 }
@@ -1022,120 +1297,127 @@ function drawPanel(d) {
   ctx.restore();
 }
 
+// Cartoon astronaut matching icon/astronaut.png: bold outline, white suit,
+// big round helmet with a warm dark visor, one arm raised, chest control panel.
 function drawAstronaut(d) {
   ctx.save(); ctx.translate(d.x, d.y); ctx.rotate(d.angle);
-  const sc = d.h / 72;
+  const sc = d.h / 64;
+  ctx.scale(sc, sc);
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  const OUT  = '#16161e';   // bold cartoon outline
+  const suit = '#eef1f6';
 
-  // Legs
-  ctx.fillStyle = '#d0d4de';
-  ctx.beginPath(); ctx.roundRect(-9*sc, 20*sc, 7*sc, 14*sc, 2*sc); ctx.fill();
-  ctx.beginPath(); ctx.roundRect( 2*sc, 20*sc, 7*sc, 14*sc, 2*sc); ctx.fill();
-  // Boots
-  ctx.fillStyle = '#a8b0be';
-  ctx.beginPath(); ctx.roundRect(-10*sc, 30*sc, 9*sc,  5*sc, 1.5*sc); ctx.fill();
-  ctx.beginPath(); ctx.roundRect(  1*sc, 30*sc, 9*sc,  5*sc, 1.5*sc); ctx.fill();
+  function capsule(x1, y1, x2, y2, thick) {   // outlined limb segment
+    ctx.strokeStyle = OUT;  ctx.lineWidth = thick + 3;
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    ctx.strokeStyle = suit; ctx.lineWidth = thick;
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  }
+  function ball(x, y, rr) {                    // outlined white ball (glove/boot)
+    ctx.fillStyle = suit; ctx.strokeStyle = OUT; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(x, y, rr, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  }
 
-  // Left arm
-  ctx.fillStyle = '#d0d4de';
-  ctx.beginPath(); ctx.roundRect(-22*sc, 2*sc, 11*sc, 7*sc, 3*sc); ctx.fill();
-  // Right arm
-  ctx.beginPath(); ctx.roundRect( 11*sc, 2*sc, 11*sc, 7*sc, 3*sc); ctx.fill();
-  // Gloves
-  ctx.fillStyle = '#b0b8c8';
-  ctx.beginPath(); ctx.arc(-17*sc, 8*sc, 4*sc, 0, Math.PI*2); ctx.fill();
-  ctx.beginPath(); ctx.arc( 17*sc, 8*sc, 4*sc, 0, Math.PI*2); ctx.fill();
+  // Limbs (behind the torso): left arm out, right arm raised waving; legs splayed
+  capsule(-8, 4, -20, 11, 7);   ball(-21, 12, 4.5);   // left arm + glove
+  capsule( 8, 2,  21, -10, 7);  ball( 22, -11, 4.5);  // right arm raised + glove
+  capsule(-6, 17, -8, 29, 8);   ball(-8, 30, 5);      // left leg + boot
+  capsule( 6, 17,  9, 29, 8);   ball( 9, 30, 5);      // right leg + boot
 
-  // Torso (with PLSS life-support box suggestion)
-  ctx.fillStyle = '#dce0ea';
-  ctx.beginPath(); ctx.roundRect(-12*sc, -2*sc, 24*sc, 24*sc, 3*sc); ctx.fill();
-  ctx.strokeStyle = '#9098a8'; ctx.lineWidth = 0.8*sc; ctx.stroke();
-  // Chest panel detail
-  ctx.fillStyle = '#6878a0';
-  ctx.fillRect(-5*sc, 3*sc, 10*sc, 6*sc);
-  ctx.fillStyle = '#f04040';
-  ctx.beginPath(); ctx.arc(-2*sc, 6*sc, 1.5*sc, 0, Math.PI*2); ctx.fill();
-  ctx.fillStyle = '#40c040';
-  ctx.beginPath(); ctx.arc( 2*sc, 6*sc, 1.5*sc, 0, Math.PI*2); ctx.fill();
+  // Torso
+  ctx.fillStyle = suit; ctx.strokeStyle = OUT; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.roundRect(-11, -2, 22, 23, 9); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = 'rgba(150,160,180,0.30)';            // soft side shading
+  ctx.beginPath(); ctx.roundRect(2, 0, 7, 19, 5); ctx.fill();
 
-  // Neck ring
-  ctx.fillStyle = '#b8c0d0';
-  ctx.beginPath(); ctx.ellipse(0, -3*sc, 7*sc, 3.5*sc, 0, 0, Math.PI*2); ctx.fill();
+  // Chest control panel — dark square + orange button (as in the png)
+  ctx.fillStyle = '#33384a'; ctx.strokeStyle = OUT; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.roundRect(-5, 4, 7, 7, 1.5); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#f3911f';
+  ctx.beginPath(); ctx.arc(5, 7, 2.3, 0, Math.PI * 2); ctx.fill();
 
   // Helmet
-  ctx.fillStyle = '#e8ecf4';
-  ctx.beginPath(); ctx.arc(0, -15*sc, 13*sc, 0, Math.PI*2); ctx.fill();
-  ctx.strokeStyle = '#a0a8b8'; ctx.lineWidth = sc; ctx.stroke();
-  // Gold visor
-  ctx.fillStyle = '#c08818';
-  ctx.beginPath(); ctx.ellipse(0, -14*sc, 9*sc, 6.5*sc, 0, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = suit; ctx.strokeStyle = OUT; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(0, -15, 14, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  // Big warm dark visor
+  ctx.fillStyle = '#2c2016'; ctx.strokeStyle = OUT; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.ellipse(0, -14.5, 10, 11, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
   // Visor sheen
-  ctx.fillStyle = 'rgba(255,215,100,0.35)';
-  ctx.beginPath(); ctx.ellipse(-3*sc, -17*sc, 4*sc, 2.5*sc, -0.3, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = 'rgba(130,160,200,0.55)';
+  ctx.beginPath(); ctx.ellipse(-4, -19, 3.4, 2.2, -0.5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.32)';
+  ctx.beginPath(); ctx.ellipse(4.5, -11, 1.8, 3, 0.3, 0, Math.PI * 2); ctx.fill();
 
   ctx.restore();
 }
 
+// Comet matching icon/comet.png: a rough dark rocky nucleus trailing a broad,
+// feathery, bright cyan→blue tail. Tail streams in +x; nucleus leads at the origin.
 function drawComet(d) {
   ctx.save(); ctx.translate(d.x, d.y); ctx.rotate(d.angle);
   const r = d.w / 2;
-  const tailLen = r * 7;
+  const tailLen = r * 8;
 
-  // Outer diffuse tail
-  const tg1 = ctx.createLinearGradient(r * 0.5, 0, r + tailLen, 0);
-  tg1.addColorStop(0,   'rgba(70,140,255,0.55)');
-  tg1.addColorStop(0.45,'rgba(50,110,255,0.22)');
-  tg1.addColorStop(1,   'rgba(20, 70,220,0)');
-  ctx.strokeStyle = tg1;
-  ctx.lineWidth = r * 2.2;
-  ctx.lineCap = 'round';
-  ctx.beginPath(); ctx.moveTo(r * 0.6, 0); ctx.lineTo(r + tailLen, 0); ctx.stroke();
+  // ── Broad feathery tail: several overlapping plumes, wispiest outermost ──
+  const plumes = [
+    { spread: r * 1.7, len: tailLen * 0.95, a: 0.16, col: '120,210,255' },
+    { spread: r * 1.1, len: tailLen * 1.00, a: 0.22, col: '150,225,255' },
+    { spread: r * 0.55,len: tailLen * 0.80, a: 0.50, col: '210,245,255' },
+  ];
+  for (const p of plumes) {
+    const g = ctx.createLinearGradient(r * 0.4, 0, r + p.len, 0);
+    g.addColorStop(0,   `rgba(${p.col},${p.a})`);
+    g.addColorStop(0.5, `rgba(${p.col},${p.a * 0.5})`);
+    g.addColorStop(1,   `rgba(${p.col},0)`);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(r * 0.4, -p.spread * 0.35);
+    ctx.quadraticCurveTo(r + p.len * 0.5, -p.spread, r + p.len, 0);
+    ctx.quadraticCurveTo(r + p.len * 0.5,  p.spread, r * 0.4, p.spread * 0.35);
+    ctx.closePath(); ctx.fill();
+  }
+  // Bright white-cyan core streak
+  const cg = ctx.createLinearGradient(r * 0.3, 0, r + tailLen * 0.7, 0);
+  cg.addColorStop(0,   'rgba(240,252,255,0.95)');
+  cg.addColorStop(0.4, 'rgba(170,230,255,0.55)');
+  cg.addColorStop(1,   'rgba(120,200,255,0)');
+  ctx.strokeStyle = cg; ctx.lineWidth = r * 0.5; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(r * 0.3, 0); ctx.lineTo(r + tailLen * 0.7, 0); ctx.stroke();
 
-  // Bright inner streak
-  const tg2 = ctx.createLinearGradient(r * 0.5, 0, r + tailLen * 0.65, 0);
-  tg2.addColorStop(0,   'rgba(210,235,255,0.92)');
-  tg2.addColorStop(0.5, 'rgba(130,190,255,0.50)');
-  tg2.addColorStop(1,   'rgba(80,150,255,0)');
-  ctx.strokeStyle = tg2;
-  ctx.lineWidth = r * 0.55;
-  ctx.beginPath(); ctx.moveTo(r * 0.6, 0); ctx.lineTo(r + tailLen * 0.65, 0); ctx.stroke();
+  // ── Glowing coma hugging the nucleus ──
+  const coma = ctx.createRadialGradient(0, 0, r * 0.2, 0, 0, r * 2.2);
+  coma.addColorStop(0,   'rgba(200,240,255,0.70)');
+  coma.addColorStop(0.5, 'rgba(120,200,255,0.22)');
+  coma.addColorStop(1,   'rgba(80,160,255,0)');
+  ctx.fillStyle = coma;
+  ctx.beginPath(); ctx.arc(0, 0, r * 2.2, 0, Math.PI * 2); ctx.fill();
 
-  // Outer coma — large diffuse dust/gas cloud
-  const coma1 = ctx.createRadialGradient(0, 0, r * 0.3, 0, 0, r * 3.0);
-  coma1.addColorStop(0,   'rgba(130,190,255,0.42)');
-  coma1.addColorStop(0.5, 'rgba(80,140,255,0.15)');
-  coma1.addColorStop(1,   'rgba(40,100,220,0)');
-  ctx.fillStyle = coma1;
-  ctx.beginPath(); ctx.arc(0, 0, r * 3.0, 0, Math.PI * 2); ctx.fill();
-
-  // Inner coma — denser dust envelope close to nucleus
-  const coma2 = ctx.createRadialGradient(0, 0, r * 0.1, 0, 0, r * 1.9);
-  coma2.addColorStop(0,   'rgba(210,235,255,0.60)');
-  coma2.addColorStop(0.55,'rgba(155,205,255,0.32)');
-  coma2.addColorStop(1,   'rgba(80,150,255,0)');
-  ctx.fillStyle = coma2;
-  ctx.beginPath(); ctx.arc(0, 0, r * 1.9, 0, Math.PI * 2); ctx.fill();
-
-  // Nucleus body (buried under coma)
-  const ng = ctx.createRadialGradient(-r * 0.22, -r * 0.22, r * 0.06, 0, 0, r);
-  ng.addColorStop(0,   '#cce8ff');
-  ng.addColorStop(0.4, '#6a8aaa');
-  ng.addColorStop(1,   '#2e3e50');
+  // ── Rough dark rocky nucleus (irregular, cratered) ──
+  ctx.save();
+  ctx.beginPath();
+  const verts = 10;
+  for (let i = 0; i < verts; i++) {
+    const a  = (i / verts) * Math.PI * 2;
+    const rr = r * (0.78 + ((i * 41) % 7) / 7 * 0.34);   // deterministic jagged radius
+    const px = Math.cos(a) * rr, py = Math.sin(a) * rr;
+    i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+  }
+  ctx.closePath(); ctx.clip();
+  const ng = ctx.createRadialGradient(-r * 0.25, -r * 0.25, r * 0.1, 0, 0, r * 1.2);
+  ng.addColorStop(0,   '#6b6f78');
+  ng.addColorStop(0.6, '#3b3d44');
+  ng.addColorStop(1,   '#1c1d22');
   ctx.fillStyle = ng;
-  ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
-
-  // Ice patch on nucleus
-  ctx.fillStyle = 'rgba(255,255,255,0.22)';
-  ctx.beginPath(); ctx.arc(-r * 0.30, -r * 0.28, r * 0.28, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = 'rgba(0,0,0,0.18)';
-  ctx.beginPath(); ctx.arc(r * 0.20, r * 0.16, r * 0.20, 0, Math.PI * 2); ctx.fill();
-
-  // Dust veil overlay — drawn ON TOP of nucleus to blur/shroud its edge
-  const veil = ctx.createRadialGradient(0, 0, r * 0.55, 0, 0, r * 1.6);
-  veil.addColorStop(0,   'rgba(170,215,255,0)');
-  veil.addColorStop(0.65,'rgba(145,195,255,0.30)');
-  veil.addColorStop(1,   'rgba(80,140,255,0)');
-  ctx.fillStyle = veil;
-  ctx.beginPath(); ctx.arc(0, 0, r * 1.6, 0, Math.PI * 2); ctx.fill();
+  ctx.fillRect(-r * 1.3, -r * 1.3, r * 2.6, r * 2.6);
+  ctx.fillStyle = 'rgba(0,0,0,0.32)';                     // craters
+  ctx.beginPath(); ctx.arc(-r * 0.2, r * 0.15, r * 0.26, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc( r * 0.3, -r * 0.25, r * 0.16, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.12)';               // dusty highlight
+  ctx.beginPath(); ctx.arc(-r * 0.35, -r * 0.3, r * 0.18, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+  // Sunlit rim glow toward the tail
+  ctx.strokeStyle = 'rgba(180,225,255,0.5)'; ctx.lineWidth = 1.4;
+  ctx.beginPath(); ctx.arc(0, 0, r * 0.95, -0.6, 1.0); ctx.stroke();
 
   ctx.restore();
 }
@@ -1228,6 +1510,34 @@ function drawTV(x, y, angle) {
   ctx.restore();
 }
 
+// Wall-mounted rotating laser turret: a small dome with a red emitter and a
+// glowing red beam that sweeps around (lethal to the telescope on contact).
+function drawLaser(mx, my, angle, len, x0, x1) {
+  if (mx + len < x0 || mx - len > x1) return;
+  const tx = mx + Math.cos(angle) * len, ty = my + Math.sin(angle) * len;
+  ctx.save();
+  ctx.lineCap = 'round';
+  // Beam: soft outer glow + bright core
+  const beam = ctx.createLinearGradient(mx, my, tx, ty);
+  beam.addColorStop(0, 'rgba(255,90,70,0.95)');
+  beam.addColorStop(1, 'rgba(255,40,40,0.20)');
+  ctx.strokeStyle = 'rgba(255,40,40,0.22)'; ctx.lineWidth = 8;
+  ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(tx, ty); ctx.stroke();
+  ctx.strokeStyle = beam; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(tx, ty); ctx.stroke();
+  // Bright tip
+  ctx.fillStyle = 'rgba(255,210,190,0.9)';
+  ctx.beginPath(); ctx.arc(tx, ty, 2.6, 0, Math.PI * 2); ctx.fill();
+  // Turret base mounted on the wall
+  ctx.fillStyle = '#3a3e48'; ctx.strokeStyle = '#20242c'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(mx, my, 8, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  // Glowing red emitter
+  ctx.shadowColor = 'rgba(255,60,40,0.9)'; ctx.shadowBlur = 8;
+  ctx.fillStyle = '#e8281c';
+  ctx.beginPath(); ctx.arc(mx, my, 3.8, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
 function drawRobot(x, y, angle) {
   ctx.save(); ctx.translate(x, y); ctx.rotate(angle);
 
@@ -1296,6 +1606,268 @@ function drawRobot(x, y, angle) {
   ctx.restore();
 }
 
+// Roman Wide Field Instrument focal-plane array (18 H4RG detectors): six columns
+// of three glassy blue/teal chips on a grey frame and gold baseplate. The columns
+// are staggered vertically — the centre pair sits highest, stepping down to the
+// outer columns, which are also set slightly apart — giving the array its stepped
+// "space-invader" silhouette. (Replaces the old Rocky sprite.) Drawn centred at
+// (cx,cy) with a single offset drop shadow so it reads as one solid object.
+const FP_TINTS = [
+  '#2f86a4','#2b6f9e','#327e86',   // col 1
+  '#2d79a6','#3a8aa0','#2e8f8a',   // col 2
+  '#3590a2','#2a6fa2','#246b8e',   // col 3
+  '#2f7ca2','#3d9094','#2b7390',   // col 4
+  '#2e87a0','#357f7a','#2c72a4',   // col 5
+  '#2f8087','#2a6f93','#3686a0',   // col 6
+];
+const FP_COL_DY = [1.0, 0.45, 0.0, 0.0, 0.45, 1.0];  // per-column drop (pitch units)
+
+function drawFocalPlane(cx, cy) {
+  const W = FP_W, Ht = FP_H, hw = W / 2, hh = Ht / 2;
+  const cols = 6, rows = 3;
+  const gapR = 0.16;                              // uniform chip gap across all columns
+  const maxDY = Math.max(...FP_COL_DY);
+  const goldM = 3.4, greyM = 2.1;                 // gold / grey frame margins beyond the chips
+
+  // Chip sizing — fit the staggered array (plus frame margin) inside the model box.
+  const chip = Math.min(
+    (W  - 2 * goldM) / (cols + (cols - 1) * gapR),
+    (Ht - 2 * goldM) / ((rows + maxDY) + gapR * (rows - 1 + maxDY))
+  );
+  const gap = chip * gapR, pitch = chip + gap;
+  const colH   = rows * chip + (rows - 1) * gap;
+  const arrayW = cols * chip + (cols - 1) * gap;
+  const arrayH = colH + maxDY * pitch;
+  const ax0 = -arrayW / 2, ayTop = -arrayH / 2;
+
+  // Per-column chip rectangle (top-left + size)
+  const colX   = c => ax0 + c * pitch;
+  const colTop = c => ayTop + FP_COL_DY[c] * pitch;
+
+  // A path tracing the array silhouette: the union of all six column rectangles,
+  // each grown by margin m. Because neighbouring columns overlap once grown, the
+  // union forms one continuous stepped outline that hugs the 18-chip layout.
+  function silhouette(m, r) {
+    ctx.beginPath();
+    for (let c = 0; c < cols; c++) {
+      ctx.roundRect(colX(c) - m, colTop(c) - m, chip + 2 * m, colH + 2 * m, r);
+    }
+  }
+
+  ctx.save();
+  ctx.translate(cx, cy);
+
+  // Gold frame following the array outline — carries the single drop shadow
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.30)';
+  ctx.shadowBlur = 9; ctx.shadowOffsetX = 5; ctx.shadowOffsetY = 5;
+  const gold = ctx.createLinearGradient(-hw, -hh, hw, hh);
+  gold.addColorStop(0, '#e6c477'); gold.addColorStop(0.5, '#c69f4e'); gold.addColorStop(1, '#9a7733');
+  ctx.fillStyle = gold;
+  silhouette(goldM, 3); ctx.fill();
+  ctx.restore();
+
+  // Grey metal frame just inside the gold edge (same stepped outline)
+  const grey = ctx.createLinearGradient(-hw, -hh, hw, hh);
+  grey.addColorStop(0, '#c0c6ce'); grey.addColorStop(0.5, '#8b9099'); grey.addColorStop(1, '#666c75');
+  ctx.fillStyle = grey;
+  silhouette(greyM, 2.4); ctx.fill();
+
+  // Detector chips
+  for (let c = 0; c < cols; c++) {
+    const x = colX(c), cTop = colTop(c);
+    for (let r = 0; r < rows; r++) {
+      const y = cTop + r * pitch;
+      // Dark backing → reads as black grout between chips
+      ctx.fillStyle = '#10151a';
+      ctx.fillRect(x - gap * 0.55, y - gap * 0.55, chip + gap * 1.1, chip + gap * 1.1);
+      // Detector chip
+      ctx.fillStyle = FP_TINTS[c * rows + r];
+      ctx.fillRect(x, y, chip, chip);
+      // Top sheen fading to a shaded base
+      const sg = ctx.createLinearGradient(x, y, x, y + chip);
+      sg.addColorStop(0,    'rgba(255,255,255,0.34)');
+      sg.addColorStop(0.45, 'rgba(255,255,255,0.05)');
+      sg.addColorStop(1,    'rgba(0,0,0,0.22)');
+      ctx.fillStyle = sg; ctx.fillRect(x, y, chip, chip);
+      // Diagonal glare streak (glassy reflection)
+      ctx.fillStyle = 'rgba(255,255,255,0.12)';
+      ctx.beginPath();
+      ctx.moveTo(x, y + chip * 0.6); ctx.lineTo(x + chip * 0.5, y);
+      ctx.lineTo(x + chip * 0.78, y); ctx.lineTo(x, y + chip * 0.95);
+      ctx.closePath(); ctx.fill();
+      // Chip bezel
+      ctx.strokeStyle = 'rgba(8,12,16,0.5)'; ctx.lineWidth = 0.5;
+      ctx.strokeRect(x + 0.25, y + 0.25, chip - 0.5, chip - 0.5);
+    }
+  }
+
+  ctx.restore();
+}
+
+// Framed portrait of Nancy Grace Roman, hung on a chamber wall: the photo inside a
+// thin wooden frame with a soft offset shadow so it reads as mounted to the wall.
+const NANCY_ASPECT = 567 / 484;   // portrait source is landscape (w / h)
+function drawNancyPortrait(cx, cy) {
+  const imgH = 58, imgW = imgH * NANCY_ASPECT;   // ≈ 68 × 58 landscape photo
+  const fb = 5;                                   // thin wooden frame border
+  const ox = cx - imgW / 2, oy = cy - imgH / 2;
+
+  // Wooden frame (carries the mounting drop shadow)
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.32)';
+  ctx.shadowBlur = 8; ctx.shadowOffsetX = 4; ctx.shadowOffsetY = 5;
+  const wood = ctx.createLinearGradient(ox - fb, oy - fb, ox - fb, oy + imgH + fb);
+  wood.addColorStop(0, '#8a5a2e'); wood.addColorStop(0.5, '#6b4423'); wood.addColorStop(1, '#4f3119');
+  ctx.fillStyle = wood;
+  ctx.fillRect(ox - fb, oy - fb, imgW + 2 * fb, imgH + 2 * fb);
+  ctx.restore();
+
+  // Frame bevels — dark outer edge, light inner lip
+  ctx.strokeStyle = 'rgba(40,24,10,0.75)'; ctx.lineWidth = 1;
+  ctx.strokeRect(ox - fb + 0.5, oy - fb + 0.5, imgW + 2 * fb - 1, imgH + 2 * fb - 1);
+  ctx.strokeStyle = 'rgba(190,140,85,0.55)'; ctx.lineWidth = 1;
+  ctx.strokeRect(ox - 1.5, oy - 1.5, imgW + 3, imgH + 3);
+
+  // The portrait itself (fallback tile if not yet loaded). High-quality smoothing
+  // plus a touch of blur softens the steep downscale (567px → ~68px) so the face
+  // reads smooth rather than pixelated.
+  if (nancyImg.complete && nancyImg.naturalWidth > 0) {
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.filter = 'blur(0.6px)';
+    ctx.drawImage(nancyImg, ox, oy, imgW, imgH);
+    ctx.restore();
+  } else {
+    ctx.fillStyle = '#37506a'; ctx.fillRect(ox, oy, imgW, imgH);
+  }
+}
+
+// A cozy bed resting on the chamber floor with someone asleep under a striped
+// blanket, facing the headboard (away from the player). cx = bed centre, floorY =
+// chamber floor. Head/pillow at the left (tall posts), foot at the right.
+function drawBed(cx, floorY) {
+  const FRAME = '#6a8fb5', FRAME_D = '#3d5777', FRAME_L = '#a6c2dc';
+  const MAT = '#ece8dd', PILLOW = '#f4f0e6', HAIR = '#34313f';
+  const BL1 = '#7b6fc4', BL2 = '#b3aae8';
+  const x0 = cx - 58, x1 = cx + 58;
+  const railY = floorY - 22, railH = 11;
+  const matTop = floorY - 40;
+
+  ctx.save();
+
+  // Back-wall drop shadow (same offset convention as the desk / portrait / focal plane).
+  // A coarse silhouette of the bed mass — the real bedding drawn on top hides it, so only
+  // the soft offset blur reads as a shadow cast on the chamber's back wall.
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.28)';
+  ctx.shadowBlur = 12; ctx.shadowOffsetX = 7; ctx.shadowOffsetY = 6;
+  ctx.fillStyle = '#2a2f3a';
+  ctx.beginPath(); ctx.roundRect(x0 - 4, matTop - 30, (x1 - x0) + 8, floorY - (matTop - 30), 10); ctx.fill();
+  ctx.beginPath(); ctx.roundRect(x0 - 6, floorY - 78, 12, 78, 6); ctx.fill();
+  ctx.restore();
+
+  // Floor shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.18)';
+  ctx.beginPath(); ctx.ellipse(cx, floorY + 3, 66, 8, 0, 0, Math.PI * 2); ctx.fill();
+
+  // Corner posts (behind the bedding) — tall at the head, short at the foot
+  function post(px, topY, w) {
+    ctx.fillStyle = FRAME;
+    ctx.beginPath(); ctx.roundRect(px - w / 2, topY, w, floorY - topY, w / 2); ctx.fill();
+    ctx.strokeStyle = FRAME_D; ctx.lineWidth = 1; ctx.stroke();
+    ctx.fillStyle = FRAME_L;
+    ctx.beginPath(); ctx.arc(px, topY, w * 0.85, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = FRAME_D; ctx.stroke();
+  }
+  post(x0, floorY - 72, 8);   // head post (tall)
+  post(x1, floorY - 50, 8);   // foot post (short)
+
+  // Side rail
+  ctx.fillStyle = FRAME;
+  ctx.beginPath(); ctx.roundRect(x0, railY, x1 - x0, railH, 3); ctx.fill();
+  ctx.strokeStyle = FRAME_D; ctx.lineWidth = 1; ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,0.20)'; ctx.fillRect(x0 + 3, railY + 1.5, x1 - x0 - 6, 2);
+
+  // Mattress
+  ctx.fillStyle = MAT;
+  ctx.beginPath(); ctx.roundRect(x0 + 3, matTop, (x1 - x0) - 6, (railY - matTop) + 3, 4); ctx.fill();
+  ctx.strokeStyle = '#cbc5b6'; ctx.lineWidth = 1; ctx.stroke();
+
+  // Pillow (head end)
+  ctx.fillStyle = PILLOW;
+  ctx.beginPath(); ctx.roundRect(x0 + 6, matTop - 9, 34, 15, 7); ctx.fill();
+  ctx.strokeStyle = '#dad4c6'; ctx.lineWidth = 1; ctx.stroke();
+
+  // Sleeper's head resting on the pillow (back of the head, facing the headboard).
+  // Hair grows from a crown and sweeps down toward the nape, with a sliver of neck
+  // showing where it meets the pillow — so it reads as hair on a head, not a helmet.
+  const hx = x0 + 26, hy = matTop - 5, hr = 11;
+  const HAIR_D = '#211f2b', HAIR_L = '#54506c';
+  // Hair mass — gently oval
+  ctx.fillStyle = HAIR;
+  ctx.beginPath(); ctx.ellipse(hx, hy, hr, hr * 1.04, 0, 0, Math.PI * 2); ctx.fill();
+  // Crown sits up-and-left; strands sweep outward following the curve of the head
+  const cxn = hx - 4, cyn = hy - 5;
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = HAIR_D; ctx.lineWidth = 1;
+  for (let k = 0; k < 8; k++) {
+    const a = -2.4 + k * 0.62;
+    ctx.beginPath();
+    ctx.moveTo(cxn, cyn);
+    ctx.quadraticCurveTo(cxn + Math.cos(a) * hr * 0.5, cyn + Math.sin(a) * hr * 0.7,
+                         hx + Math.cos(a) * hr * 1.02, hy + Math.sin(a) * hr * 1.05);
+    ctx.stroke();
+  }
+  // Lighter highlight strands catching light near the crown
+  ctx.strokeStyle = HAIR_L; ctx.lineWidth = 0.8;
+  for (let k = 0; k < 3; k++) {
+    const a = -1.7 + k * 0.5;
+    ctx.beginPath();
+    ctx.moveTo(cxn, cyn);
+    ctx.quadraticCurveTo(cxn + Math.cos(a) * 4, cyn + Math.sin(a) * 4,
+                         hx + Math.cos(a) * hr * 0.8, hy + Math.sin(a) * hr * 0.82);
+    ctx.stroke();
+  }
+  // Crown swirl point
+  ctx.fillStyle = HAIR_D; ctx.beginPath(); ctx.arc(cxn, cyn, 1, 0, Math.PI * 2); ctx.fill();
+  // A sliver of skin at the nape (lower-right), then a ragged hair tip over it
+  ctx.fillStyle = '#caa07e';
+  ctx.beginPath(); ctx.ellipse(hx + hr * 0.5, hy + hr * 0.78, 3.2, 2.3, -0.5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = HAIR;
+  ctx.beginPath(); ctx.arc(hx + hr * 0.38, hy + hr * 0.66, 2.6, 0, Math.PI * 2); ctx.fill();
+
+  // Striped blanket mounded over the body (neck → foot)
+  const bx0 = x0 + 32, bx1 = x1 - 4;
+  function blanketTop() {
+    ctx.beginPath();
+    ctx.moveTo(bx0, matTop + 2);
+    ctx.quadraticCurveTo(bx0 + 6, matTop - 18, cx + 6, matTop - 20);
+    ctx.quadraticCurveTo(bx1 - 6, matTop - 22, bx1, matTop - 2);
+  }
+  ctx.save();
+  blanketTop(); ctx.lineTo(bx1, railY + 2); ctx.lineTo(bx0, railY + 2); ctx.closePath(); ctx.clip();
+  const sw = 12;
+  for (let sx = bx0 - 4, i = 0; sx < bx1 + sw; sx += sw, i++) {
+    ctx.fillStyle = i % 2 ? BL1 : BL2;
+    ctx.fillRect(sx, matTop - 32, sw, 64);
+  }
+  ctx.restore();
+  // Blanket top edge + a sheet fold near the neck
+  ctx.strokeStyle = '#574d9c'; ctx.lineWidth = 1.3; blanketTop(); ctx.stroke();
+  ctx.strokeStyle = '#dcd6f4'; ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.moveTo(bx0, matTop - 1); ctx.quadraticCurveTo(bx0 + 6, matTop - 13, bx0 + 15, matTop - 14); ctx.stroke();
+
+  // Zzz drifting up from the head
+  ctx.fillStyle = 'rgba(175,210,255,0.9)'; ctx.textAlign = 'center';
+  ctx.font = '800 11px "Segoe UI", Arial'; ctx.fillText('z', x0 + 42, matTop - 24);
+  ctx.font = '800 14px "Segoe UI", Arial'; ctx.fillText('z', x0 + 53, matTop - 36);
+  ctx.font = '800 18px "Segoe UI", Arial'; ctx.fillText('Z', x0 + 66, matTop - 50);
+
+  ctx.restore();
+}
+
 // Returns {cy, gapH} of the tunnel opening at a given x-offset along the structure.
 function getTunnelShape(d, xOff) {
   const kf = d.keyframes;
@@ -1311,19 +1883,70 @@ function getTunnelShape(d, xOff) {
   };
 }
 
+// Animated airlock hatch at an external tunnel interface (the open-space ↔ structure
+// boundary only — never the internal zone doorways). Two panels slide apart as the
+// telescope nears and seal again once it has passed. The opening is driven purely by
+// the craft's horizontal distance to the doorway, so the hatch is always fully open
+// while the craft is alongside it — quick enough to fly through without ever touching.
+function drawTunnelDoor(d, xOff, doorX) {
+  if (doorX < -12 || doorX > W + 12) return;
+  const sh   = getTunnelShape(d, xOff);
+  const topY = sh.cy - sh.gapH / 2;
+  const botY = sh.cy + sh.gapH / 2;
+
+  const OPEN_DIST = 120, ANIM = 90;   // fully open within 120px; gradual 90px ramp
+  const o = Math.max(0, Math.min(1, (OPEN_DIST + ANIM - Math.abs(doorX - CRAFT_X)) / ANIM));
+  if (o >= 0.999) return;             // fully retracted → nothing to draw
+
+  const DW   = 16;                    // door slab thickness
+  const dx0  = doorX - DW / 2;
+  const half = sh.gapH / 2;
+  const topPanelBot = sh.cy - o * half;  // top panel hangs from ceiling, grows as o→0
+  const botPanelTop = sh.cy + o * half;  // bottom panel rises from floor
+
+  function panel(yA, yB, leadEdge, leadDir) {
+    const h = yB - yA;
+    if (h <= 0.5) return;
+    const g = ctx.createLinearGradient(dx0, 0, dx0 + DW, 0);
+    g.addColorStop(0, '#2c3346'); g.addColorStop(0.5, '#5a6478'); g.addColorStop(1, '#2c3346');
+    ctx.fillStyle = g; ctx.fillRect(dx0, yA, DW, h);
+    ctx.strokeStyle = '#161c2b'; ctx.lineWidth = 1.5; ctx.strokeRect(dx0, yA, DW, h);
+    // Hazard stripe on the leading edge (the face that meets the gap centre)
+    const bandH = 5, by = leadDir > 0 ? leadEdge - bandH : leadEdge;
+    for (let i = 0; i < DW; i += 6) {
+      ctx.fillStyle = ((i / 6) | 0) % 2 ? '#14142a' : '#f5c518';
+      ctx.fillRect(dx0 + i, by, Math.min(6, DW - i), bandH);
+    }
+  }
+  panel(topY, topPanelBot, topPanelBot, +1);
+  panel(botPanelTop, botY, botPanelTop, -1);
+}
+
 let _tunnelBgGrad = null, _tunnelIntGrad = null;  // constant gradients, built once
 function drawTunnel(d) {
   const x0   = Math.max(0, d.x);
   const x1   = Math.min(W, d.x + d.length);
   if (x1 <= x0) return;
 
-  // Build vertex arrays every 4 px for smooth curved walls
+  // Build vertex arrays for the walls. The sample grid is anchored in STRUCTURE
+  // space (xOff), not screen space, so the vertices don't drift as the structure
+  // scrolls — that drift was what made the sharp threshold walls flicker. Every
+  // keyframe boundary is also added as a paired vertex (one just before, one at)
+  // so each vertical wall lands exactly on a vertex and stays crisp every frame.
   const step = 4;
+  const oStart = Math.max(0, x0 - d.x);          // visible xOff range
+  const oEnd   = Math.min(d.length, x1 - d.x);
+  const offSet = new Set([oStart, oEnd]);
+  for (let o = Math.ceil(oStart / step) * step; o < oEnd; o += step) offSet.add(o);
+  for (const kf of d.keyframes) {
+    if (kf.x > oStart && kf.x < oEnd) { offSet.add(kf.x - 0.01); offSet.add(kf.x); }
+  }
+  const offs = Array.from(offSet).sort((a, b) => a - b);
+
   const xs = [], topYs = [], botYs = [];
-  for (let x = x0; x <= x1 + step; x += step) {
-    const xc = Math.min(x, x1);
-    const sh = getTunnelShape(d, xc - d.x);
-    xs.push(xc);
+  for (const o of offs) {
+    const sh = getTunnelShape(d, o);
+    xs.push(d.x + o);
     topYs.push(sh.cy - sh.gapH / 2);
     botYs.push(sh.cy + sh.gapH / 2);
   }
@@ -1393,9 +2016,11 @@ function drawTunnel(d) {
   const panW  = 64;
   const seam0 = x0 - ((x0 - d.x) % panW);
   for (let px = seam0; px <= x1; px += panW) {
-    const idx = Math.max(0, Math.min(Math.round((px - x0) / step), n - 1));
-    ctx.beginPath(); ctx.moveTo(px, 0);          ctx.lineTo(px, topYs[idx]); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(px, botYs[idx]); ctx.lineTo(px, H - GROUND_H); ctx.stroke();
+    // Sample the wall edges directly (vertices are no longer uniformly spaced)
+    const sh = getTunnelShape(d, px - d.x);
+    const segTop = sh.cy - sh.gapH / 2, segBot = sh.cy + sh.gapH / 2;
+    ctx.beginPath(); ctx.moveTo(px, 0);      ctx.lineTo(px, segTop); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(px, segBot); ctx.lineTo(px, H - GROUND_H); ctx.stroke();
   }
 
   // ── Inner structural cap (dark band) then blue guide-light strip ──
@@ -1419,7 +2044,7 @@ function drawTunnel(d) {
   // ── Rectangular windows on the interior grey wall (one per room) ──
   // Room 1 centre: xOff 650  |  Room 2 centre: xOff 2050
   const windowXOffs = [650, 2050];
-  const WW = 120, WH = 80; // landscape rectangle
+  const WW = 300, WH = 200; // landscape rectangle (enlarged 150%)
   for (let wi = 0; wi < windowXOffs.length; wi++) {
     const wxOff = windowXOffs[wi];
     const wx = d.x + wxOff;
@@ -1433,7 +2058,7 @@ function drawTunnel(d) {
       : wsh.cy + wsh.gapH / 2 - WH / 2 - 10;
     const wx0 = wx - WW / 2, wy0 = wy - WH / 2;
 
-    // Star field view through window
+    // Glass interior: star-field view + reflective glare, clipped to the pane
     ctx.save();
     ctx.beginPath(); ctx.rect(wx0, wy0, WW, WH); ctx.clip();
     ctx.fillStyle = '#060919'; ctx.fillRect(wx0, wy0, WW, WH);
@@ -1443,16 +2068,49 @@ function drawTunnel(d) {
       ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill();
     }
     ctx.globalAlpha = 1;
+    // Subtle blue glass tint
+    const gt = ctx.createLinearGradient(wx0, wy0, wx0, wy0 + WH);
+    gt.addColorStop(0, 'rgba(120,170,230,0.12)');
+    gt.addColorStop(1, 'rgba(60,90,150,0.05)');
+    ctx.fillStyle = gt; ctx.fillRect(wx0, wy0, WW, WH);
+    // Diagonal glare streaks (reflection across the glass)
+    ctx.fillStyle = 'rgba(255,255,255,0.10)';
+    ctx.beginPath();
+    ctx.moveTo(wx0 + WW * 0.12, wy0);
+    ctx.lineTo(wx0 + WW * 0.44, wy0);
+    ctx.lineTo(wx0 + WW * 0.04, wy0 + WH);
+    ctx.lineTo(wx0 - WW * 0.16, wy0 + WH);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.16)';
+    ctx.beginPath();
+    ctx.moveTo(wx0 + WW * 0.52, wy0);
+    ctx.lineTo(wx0 + WW * 0.63, wy0);
+    ctx.lineTo(wx0 + WW * 0.31, wy0 + WH);
+    ctx.lineTo(wx0 + WW * 0.20, wy0 + WH);
+    ctx.closePath(); ctx.fill();
     ctx.restore();
 
     // Window frame + inner bevel
-    ctx.strokeStyle = '#50586a'; ctx.lineWidth = 4;
+    ctx.strokeStyle = '#50586a'; ctx.lineWidth = 5;
     ctx.strokeRect(wx0, wy0, WW, WH);
-    ctx.strokeStyle = 'rgba(190,200,215,0.55)'; ctx.lineWidth = 1.5;
-    ctx.strokeRect(wx0 + 3.5, wy0 + 3.5, WW - 7, WH - 7);
+    ctx.strokeStyle = 'rgba(190,200,215,0.55)'; ctx.lineWidth = 2;
+    ctx.strokeRect(wx0 + 4, wy0 + 4, WW - 8, WH - 8);
   }
 
-  // ── Desk, chair & Nancy figurine (Room 1, randomized position) ──
+  // ── Framed Nancy portrait mounted on the Room 1 back wall ──
+  {
+    const pxOff = d.room1.portraitXOff;
+    const pAbsX = d.x + pxOff;
+    if (pAbsX + 60 >= x0 && pAbsX - 60 <= x1) {
+      const psh = getTunnelShape(d, pxOff);
+      if (psh.gapH > 200) {                                  // Room 1 only
+        const pCY = psh.cy - psh.gapH * 0.16;                // hung upper-middle on the wall
+        drawNancyPortrait(pAbsX, pCY);
+      }
+    }
+  }
+
+  // ── Desk & chair (Room 1, randomized position; holds the focal-plane array) ──
   const deskXOff = d.room1.deskXOff;
   const deskAbsX = d.x + deskXOff;
   if (deskAbsX + 90 >= x0 && deskAbsX - 90 <= x1) {
@@ -1461,26 +2119,32 @@ function drawTunnel(d) {
 
     // Only draw inside Room 1 (large gap)
     if (dsh.gapH > 200) {
-      const deskW = 72, deskLegH = 24, deskTopH = 6;
+      // Under inverted gravity the furniture is bolted to the ceiling: mirror the
+      // floor-built desk & chair vertically about the chamber centreline.
+      ctx.save();
+      if (d.gravityInverter) { ctx.translate(0, dsh.cy); ctx.scale(1, -1); ctx.translate(0, -dsh.cy); }
+      const DS = 1.5;  // desk & chair enlarged 50%
+      const deskW = 72 * DS, deskLegH = 24 * DS, deskTopH = 6 * DS;
       const deskTopY = floorY - deskLegH - deskTopH;
 
       // Chair — simple side profile, facing the desk (backrest on the left)
-      const seatW = 26, seatH = 5, chairLegH = 17;
+      const seatW = 26 * DS, seatH = 5 * DS, chairLegH = 17 * DS;
       const seatY = floorY - chairLegH - seatH;
-      const backX = deskAbsX - 56;          // back/left edge of the seat
+      const backX = deskAbsX - 56 * DS;     // back/left edge of the seat
+      const backH = 22 * DS;                // backrest height above the seat
 
       // Static drop shadow (offset lower-right, softened) behind the furniture masses for depth
-      const fsx = 4, fsy = 5;
+      const fsx = 5, fsy = 6;
       ctx.save();
       ctx.filter = 'blur(4px)';
       ctx.fillStyle = 'rgba(0,0,0,0.18)';
-      ctx.fillRect(backX + fsx, seatY - 22 + fsy, seatW, chairLegH + seatH + 22);            // chair mass
+      ctx.fillRect(backX + fsx, seatY - backH + fsy, seatW, chairLegH + seatH + backH);     // chair mass
       ctx.fillRect(deskAbsX - deskW / 2 + fsx, deskTopY + fsy, deskW, deskLegH + deskTopH);  // desk mass
       ctx.restore();
 
       // Backrest: single vertical post
       ctx.fillStyle = '#7a4a28';
-      ctx.fillRect(backX, seatY - 22, 4, 27);   // back post
+      ctx.fillRect(backX, seatY - backH, 4 * DS, backH + 5 * DS);   // back post
       // Seat plank
       ctx.fillStyle = '#8b5e3c';
       ctx.fillRect(backX, seatY, seatW, seatH);
@@ -1488,13 +2152,13 @@ function drawTunnel(d) {
       ctx.strokeRect(backX, seatY, seatW, seatH);
       // Two legs (back and front)
       ctx.fillStyle = '#5c3318';
-      ctx.fillRect(backX, seatY + seatH, 4, chairLegH);
-      ctx.fillRect(backX + seatW - 4, seatY + seatH, 4, chairLegH);
+      ctx.fillRect(backX, seatY + seatH, 4 * DS, chairLegH);
+      ctx.fillRect(backX + seatW - 4 * DS, seatY + seatH, 4 * DS, chairLegH);
 
       // Desk legs
       ctx.fillStyle = '#5c3318';
-      ctx.fillRect(deskAbsX - 33, deskTopY + deskTopH, 5, deskLegH);
-      ctx.fillRect(deskAbsX + 28, deskTopY + deskTopH, 5, deskLegH);
+      ctx.fillRect(deskAbsX - 33 * DS, deskTopY + deskTopH, 5 * DS, deskLegH);
+      ctx.fillRect(deskAbsX + 28 * DS, deskTopY + deskTopH, 5 * DS, deskLegH);
       // Desk surface
       ctx.fillStyle = '#a0714a';
       ctx.fillRect(deskAbsX - deskW / 2, deskTopY, deskW, deskTopH);
@@ -1502,50 +2166,43 @@ function drawTunnel(d) {
       ctx.strokeRect(deskAbsX - deskW / 2, deskTopY, deskW, deskTopH);
       // Desk edge highlight
       ctx.fillStyle = 'rgba(255,220,170,0.18)';
-      ctx.fillRect(deskAbsX - deskW / 2 + 1, deskTopY + 1, deskW - 2, 2);
-
-      // Nancy figurine sitting on desk (source 221×360, aspect ≈ 0.61)
-      const figH = 40, figW = figH * 0.61;
-      const figX = deskAbsX - figW / 2 + 6;
-      const figY = deskTopY - figH;
-      if (nancyImg.complete && nancyImg.naturalWidth > 0) {
-        ctx.save();
-        ctx.shadowColor = 'rgba(0,0,0,0.25)';
-        ctx.shadowBlur = 9;
-        ctx.shadowOffsetX = 4;
-        ctx.shadowOffsetY = 4;
-        ctx.drawImage(nancyImg, figX, figY, figW, figH);
-        ctx.restore();
-      }
+      ctx.fillRect(deskAbsX - deskW / 2 + 1, deskTopY + 1, deskW - 2, 3);
+      // (The focal-plane array rests on this desk — drawn in its own block below.)
+      ctx.restore();
     }
   }
 
-  // ── Rocky in Room 1: floor-planted in most structures, drifting/bouncing in
-  //    the alternating (rockyBounces) ones. The drop shadow is drawn with the
-  //    sprite each frame, so it tracks Rocky as he moves and bounces. ──
-  {
+  // ── Sleeping-quarters bed on the Room 1 floor (1st structure only) ──
+  if (d.structIndex === 1 && d.room1.bedXOff != null) {
+    const bedAbsX = d.x + d.room1.bedXOff;
+    if (bedAbsX + 70 >= x0 && bedAbsX - 70 <= x1) {
+      const bsh = getTunnelShape(d, d.room1.bedXOff);
+      if (bsh.gapH > 200) drawBed(bedAbsX, bsh.cy + bsh.gapH / 2);
+    }
+  }
+
+  // ── Focal-plane array hazard in Room 1: floor-planted in most structures,
+  //    drifting/bouncing in the alternating (rockyBounces) ones. The drop shadow
+  //    is drawn with the model each frame, so it tracks the array as it moves. ──
+  if (!d.laserChamber) {                   // laser chambers hold no focal-plane array
     const r1 = d.room1;
-    const rockySize = 46;                  // source is 640×640 (square)
-    const rockyXOff = r1.rockyBounces ? r1.rocky.x : r1.rockyXOff;
-    const rockyAbsX = d.x + rockyXOff;
-    if (rockyAbsX + 40 >= x0 && rockyAbsX - 40 <= x1) {
-      let rockyX = rockyAbsX - rockySize / 2;
-      let rockyY;
-      let visible = true;
-      if (r1.rockyBounces) {
-        rockyY = r1.rocky.y - rockySize / 2;   // rocky.y is the sprite centre
-      } else {
-        const rsh = getTunnelShape(d, rockyXOff);
-        visible = rsh.gapH > 200;              // only once the chamber has opened
-        rockyY = rsh.cy + rsh.gapH / 2 - rockySize + 2; // feet planted on the floor
-      }
-      if (visible && rockyImg.complete && rockyImg.naturalWidth > 0) {
+    function blitRocky(absX, absY) {       // absX/absY = model centre
+      if (absX + FP_W < x0 || absX - FP_W > x1) return;
+      drawFocalPlane(absX, absY);
+    }
+    if (r1.rockyBounces) {
+      // Four solid focal-plane arrays drifting around the chamber.
+      for (const rk of r1.rockies) blitRocky(d.x + rk.x, rk.y);
+    } else {
+      // Single array resting on the wooden desk (where Nancy used to sit).
+      const dsh = getTunnelShape(d, r1.deskXOff);
+      if (dsh.gapH > 200) {                 // only once the chamber has opened
+        const DS = 1.5;
+        const deskTopY = (dsh.cy + dsh.gapH / 2) - 24 * DS - 6 * DS;  // floor - legH - topH
+        // Match the desk: hangs from the ceiling under inverted gravity.
         ctx.save();
-        ctx.shadowColor = 'rgba(0,0,0,0.28)';
-        ctx.shadowBlur = 10;
-        ctx.shadowOffsetX = 5;
-        ctx.shadowOffsetY = 5;
-        ctx.drawImage(rockyImg, rockyX, rockyY, rockySize, rockySize);
+        if (d.gravityInverter) { ctx.translate(0, dsh.cy); ctx.scale(1, -1); ctx.translate(0, -dsh.cy); }
+        blitRocky(d.x + r1.deskXOff, deskTopY - FP_H / 2 + 2);
         ctx.restore();
       }
     }
@@ -1574,28 +2231,38 @@ function drawTunnel(d) {
   // ── Split-path section (even-numbered tunnels only) ──
   if (d.split) {
     const spl  = d.split;
-    const sx0  = Math.max(x0, d.x + spl.xStart);
-    const sx1  = Math.min(x1, d.x + spl.deadEndX);
+    const visible = (d.x + spl.deadEndX >= x0 && d.x + spl.xStart <= x1);
 
-    if (sx1 > sx0) {
-      // Dividing wall fill
+    // Trace a polygon (xOff-space verts) into a path, translated to world X.
+    function tracePoly(poly) {
+      ctx.beginPath();
+      ctx.moveTo(d.x + poly[0][0], poly[0][1]);
+      for (let i = 1; i < poly.length; i++) ctx.lineTo(d.x + poly[i][0], poly[i][1]);
+      ctx.closePath();
+    }
+
+    if (visible) {
+      // Solid divider pieces (the diagonal gap between them is the escape route)
       ctx.fillStyle = bg;
-      ctx.fillRect(sx0, spl.divY_top, sx1 - sx0, spl.divY_bot - spl.divY_top);
+      for (const poly of spl.dividerPolys) { tracePoly(poly); ctx.fill(); }
 
-      // Panel seams on divider
-      ctx.strokeStyle = 'rgba(70,80,140,0.35)'; ctx.lineWidth = 1;
-      const sd0 = sx0 - ((sx0 - (d.x + spl.xStart)) % panW);
-      for (let px = sd0; px <= sx1; px += panW) {
-        ctx.beginPath(); ctx.moveTo(px, spl.divY_top); ctx.lineTo(px, spl.divY_bot); ctx.stroke();
+      // Panel seams, clipped to each piece
+      for (const poly of spl.dividerPolys) {
+        ctx.save();
+        tracePoly(poly); ctx.clip();
+        ctx.strokeStyle = 'rgba(70,80,140,0.35)'; ctx.lineWidth = 1;
+        for (let px = d.x + spl.xStart; px <= d.x + spl.deadEndX; px += panW) {
+          ctx.beginPath(); ctx.moveTo(px, spl.divY_top - 5); ctx.lineTo(px, spl.divY_bot + 5); ctx.stroke();
+        }
+        ctx.restore();
       }
 
-      // Structural cap + blue guide strip on both edges of divider
+      // Structural cap + blue guide strip around each piece (incl. diagonal walls)
       ctx.lineJoin = 'round';
-      for (const ey of [spl.divY_top, spl.divY_bot]) {
-        ctx.lineWidth = 9; ctx.strokeStyle = '#2a2a50';
-        ctx.beginPath(); ctx.moveTo(sx0, ey); ctx.lineTo(sx1, ey); ctx.stroke();
-        ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(80,180,255,0.90)';
-        ctx.beginPath(); ctx.moveTo(sx0, ey); ctx.lineTo(sx1, ey); ctx.stroke();
+      for (const poly of spl.dividerPolys) {
+        tracePoly(poly);
+        ctx.lineWidth = 9; ctx.strokeStyle = '#2a2a50'; ctx.stroke();
+        ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(80,180,255,0.90)'; ctx.stroke();
       }
     }
 
@@ -1632,9 +2299,14 @@ function drawTunnel(d) {
     else                   drawRobot(ox, obj.y, obj.angle);
   }
 
-  // ── External entry / exit faces ──
+  // ── Rotating laser turrets (4th structure) ──
+  if (d.lasers) for (const lz of d.lasers) drawLaser(d.x + lz.xOff, lz.y, lz.angle, lz.len, x0, x1);
+
+  // ── External entry / exit faces + animated airlock hatches ──
   drawFace(d.x + d.length, d.length);
   drawFace(d.x + fw,       0);
+  drawTunnelDoor(d, 0,        d.x);              // entrance hatch
+  drawTunnelDoor(d, d.length, d.x + d.length);   // exit hatch
 
   // ── Internal doorway faces at each zone wall ──
   // Corridor→Room: face shows corridor gap from the corridor side (xOff-1)
@@ -1646,6 +2318,52 @@ function drawTunnel(d) {
     [d.x + d.wallXoffs[3] + fw,   d.wallXoffs[3] + 1],  // room 2 right wall
   ];
   for (const [fx, xOff] of wallPattern) drawFace(fx, xOff);
+
+  // ── Gravity-inverter structure: caution sign + blue transition films ──
+  if (d.gravityInverter) {
+    // Caution sign painted on the entry-corridor lower wall
+    const signX = d.x + 150;                       // centre of the entry corridor
+    if (signX + 150 >= x0 && signX - 150 <= x1) {
+      const sh    = getTunnelShape(d, 150);
+      const floor = sh.cy + sh.gapH / 2;           // corridor floor (top of lower wall)
+      const ty    = floor + (H - GROUND_H - floor) * 0.45;
+      ctx.save();
+      ctx.textAlign = 'center';
+      ctx.shadowColor = 'rgba(255,180,0,0.85)'; ctx.shadowBlur = 9;
+      ctx.fillStyle = '#ffcc00';
+      ctx.font = '900 15px "Segoe UI", Arial, sans-serif';
+      ctx.fillText('⚠ CAUTION: ⚠', signX, ty - 9);
+      ctx.font = '900 17px "Segoe UI", Arial, sans-serif';
+      ctx.fillText('GRAVITY INVERTER!', signX, ty + 12);
+      ctx.restore();
+    }
+    // Blue transition films across the gap: one ending where the entry corridor
+    // meets the inverted-gravity chamber (xOff 300), one at the structure exit
+    // back into normal-gravity space (xOff = length). 100px long, ending at the edge.
+    drawTransitionFilm(d, 200, 300, x0, x1);
+    drawTransitionFilm(d, d.length - 100, d.length, x0, x1);
+  }
+}
+
+// A short blue-tinted "membrane" spanning the tunnel gap over [xOffA, xOffB] —
+// a visual cue marking a gravity transition the telescope is about to fly through.
+function drawTransitionFilm(d, xOffA, xOffB, x0, x1) {
+  const wxA = d.x + xOffA, wxB = d.x + xOffB;
+  if (wxB < x0 || wxA > x1) return;
+  const sh   = getTunnelShape(d, (xOffA + xOffB) / 2);
+  const topY = sh.cy - sh.gapH / 2, botY = sh.cy + sh.gapH / 2;
+  ctx.save();
+  const g = ctx.createLinearGradient(wxA, 0, wxB, 0);
+  g.addColorStop(0,   'rgba(90,170,255,0.10)');
+  g.addColorStop(0.5, 'rgba(110,195,255,0.34)');
+  g.addColorStop(1,   'rgba(90,170,255,0.10)');
+  ctx.fillStyle = g;
+  ctx.fillRect(wxA, topY, wxB - wxA, botY - topY);
+  // Bright edges so the membrane reads clearly
+  ctx.strokeStyle = 'rgba(160,215,255,0.6)'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(wxA, topY); ctx.lineTo(wxA, botY); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(wxB, topY); ctx.lineTo(wxB, botY); ctx.stroke();
+  ctx.restore();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1657,13 +2375,11 @@ craftImg.src = 'telescope.png';
 const nancyImg = new Image();
 nancyImg.src = 'nancy.png';
 
-const rockyImg = new Image();
-rockyImg.src = 'rocky.png';
-
 function drawCraft(cx, cy, angle) {
   ctx.save(); ctx.translate(cx, cy); ctx.rotate(angle);
-  // Thruster flame from the back (left) end when rising
-  if (SHOW_THRUSTER && angle < -0.05) {
+  // Thruster flame from the back (left) end on the thrust stroke. Thrust is
+  // against gravity, so the trigger flips with gravSign (up normally, down inverted).
+  if (SHOW_THRUSTER && angle * gravSign < -0.05) {
     ctx.fillStyle = 'rgba(255,140,0,0.85)';
     ctx.beginPath();
     ctx.moveTo(-30,0); ctx.lineTo(-44-Math.random()*8,-5); ctx.lineTo(-44-Math.random()*8,5);
@@ -1782,7 +2498,8 @@ function onTap() {
   // is a no-op so the overlay buttons (LAUNCH, Submit, Play Again) and the
   // nickname input keep working — we no longer cancel the event at all.
   if (state === STATE.READY)   { beginPlay();   return; }
-  if (state === STATE.PLAYING) { craftV = FLAP; return; }
+  // Flap thrusts opposite to gravity: up normally, down while gravity is inverted.
+  if (state === STATE.PLAYING) { craftV = FLAP * gravSign; return; }
 }
 // Bind to the whole container, not just the canvas: the GET READY / GAME OVER
 // overlays sit on top of the canvas, so a tap during READY would otherwise be
