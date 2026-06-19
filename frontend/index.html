@@ -497,12 +497,13 @@ function drawShootingStar() {
 // ═══════════════════════════════════════════════════════════════
 // Spawn weights — asteroids dominate the field; UFOs are as rare as the
 // (very rare) shooting star. Boosters/panels are the common man-made debris.
+// Booster and astronaut weights are 10x reduced from their original values (14→1.4, 6→0.6).
 const DEBRIS_WEIGHTS = [
   ['asteroid', 62],
-  ['booster',  14],
-  ['panel',    13],
-  ['astronaut', 6],
-  ['comet',     4],
+  ['booster',  2],
+  ['panel',    10],
+  ['astronaut', 0.8],
+  ['comet',     3],
   ['ufo',       1],
 ];
 const DEBRIS_WEIGHT_TOTAL = DEBRIS_WEIGHTS.reduce((s, e) => s + e[1], 0);
